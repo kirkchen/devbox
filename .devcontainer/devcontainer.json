@@ -1,0 +1,49 @@
+{
+  "name": "DevContainer",
+  "build": {
+    "dockerfile": "./Dockerfile",
+    "context": "."
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.fontFamily": "'SauceCodePro Nerd Font', 'SauceCodePro NF', 'MesloLGS NF', 'Hack Nerd Font', monospace",
+        "terminal.integrated.fontSize": 14,
+        "terminal.integrated.lineHeight": 1.2,
+        "terminal.integrated.letterSpacing": 0,
+        "terminal.integrated.fontWeight": "normal",
+        "terminal.integrated.fontWeightBold": "bold",
+        "terminal.integrated.gpuAcceleration": "off",
+        "terminal.integrated.rendererType": "dom"
+      }
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true,
+      "installOhMyZsh": false,
+      "username": "vscode",
+      "userUid": "1000",
+      "userGid": "1000",
+      "upgradePackages": true
+    },
+    "ghcr.io/devcontainers/features/git:1": {
+      "version": "latest",
+      "ppa": false
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
+  },
+  // Set up convenience alias and show welcome message
+  "postCreateCommand": "echo 'alias setup-dotfiles=\"bash /workspaces/devbox/.devcontainer/scripts/setup-dotfiles.sh\"' >> ~/.bashrc && echo 'alias setup-dotfiles=\"bash /workspaces/devbox/.devcontainer/scripts/setup-dotfiles.sh\"' >> ~/.zshrc && bash /workspaces/devbox/.devcontainer/scripts/welcome.sh",
+  "remoteUser": "vscode",
+  "runArgs": [
+    "--cap-add=SYS_PTRACE",
+    "--security-opt",
+    "seccomp=unconfined"
+  ]
+}

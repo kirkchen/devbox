@@ -1,0 +1,67 @@
+# Claude configuration
+.claude/
+
+# DevContainer specific
+.devcontainer/.env
+.devcontainer/secrets/
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Dependencies
+node_modules/
+vendor/
+venv/
+__pycache__/
+*.pyc
+
+# Build outputs
+dist/
+build/
+out/
+target/
+*.o
+*.so
+*.dll
+*.exe
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+.cache/
+
+# Docker
+.docker/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Credentials
+*.pem
+*.key
+*.cert
+*.crt
+credentials
+secrets/

@@ -1,0 +1,69 @@
+# Chezmoi ignore file
+# Files and directories that should not be managed by chezmoi
+
+# README and documentation
+README.md
+LICENSE
+CHANGELOG.md
+
+# Git repository files
+.git
+.gitignore
+.gitmodules
+
+# Chezmoi scripts and templates (they're processed, not copied)
+.chezmoiscripts
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# Log files
+*.log
+
+# Language-specific directories (not managing runtimes)
+.rbenv
+.nvm
+.gvm
+.conda
+.pnpm
+
+# Cache directories
+.cache
+.npm
+.yarn
+
+# Local configuration that shouldn't be synced
+.env
+.env.local
+.env.*.local
+
+# SSH keys (should be handled separately)
+.ssh/id_*
+.ssh/*.pem
+.ssh/known_hosts
+
+# GPG keys
+.gnupg
+
+# Application-specific data
+.docker
+.kube
+.aws/credentials
+.gcloud
+
+# Build artifacts
+dist
+build
+node_modules
+vendor
+target
