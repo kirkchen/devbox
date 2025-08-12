@@ -30,26 +30,7 @@ fi
 # Editor
 alias e="$EDITOR"
 
-# Quick navigation
-alias ..='cd ..'
-alias ...='cd ../..'
-alias ....='cd ../../..'
-alias ~='cd ~'
-alias -- -='cd -'
-
-# Utility aliases
-alias mkdir='mkdir -pv'
-alias grep='grep --color=auto'
-alias df='df -h'
-alias du='du -h'
-alias free='free -h'
-alias top='htop'
-
 # Safety nets
 alias rm='rm -i'
 alias cp='cp -i'
 alias mv='mv -i'
-
-# Reload shell configuration
-alias reload='source ~/.zshrc'
-alias zshconfig="$EDITOR ~/.zshrc"
