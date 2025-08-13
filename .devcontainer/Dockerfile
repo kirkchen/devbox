@@ -9,7 +9,6 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     curl \
     wget \
     git \
-    vim \
     tmux \
     # Build tools (for some installations)
     build-essential \
@@ -22,10 +21,39 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     # Additional useful tools
     jq \
     unzip \
+    # Dependencies for building Vim
+    libncurses5-dev \
+    libgtk2.0-dev \
+    libatk1.0-dev \
+    libcairo2-dev \
+    libx11-dev \
+    libxpm-dev \
+    libxt-dev \
+    python3-dev \
     # Clean up
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Vim 9.x from source
+RUN git clone https://github.com/vim/vim.git /tmp/vim \
+    && cd /tmp/vim \
+    && ./configure \
+        --with-features=huge \
+        --enable-multibyte \
+        --enable-python3interp=yes \
+        --with-python3-config-dir=/usr/lib/python3.*/config-*-linux-gnu \
+        --enable-gui=gtk2 \
+        --enable-cscope \
+        --prefix=/usr/local \
+    && make -j$(nproc) \
+    && make install \
+    && cd / \
+    && rm -rf /tmp/vim \
+    && update-alternatives --install /usr/bin/editor editor /usr/local/bin/vim 60 \
+    && update-alternatives --config editor \
+    && update-alternatives --install /usr/bin/vi vi /usr/local/bin/vim 60 \
+    && update-alternatives --config vi
 
 # Install fzf globally
 RUN git clone --depth 1 https://github.com/junegunn/fzf.git /opt/fzf \
