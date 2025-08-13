@@ -45,5 +45,10 @@
     "--cap-add=SYS_PTRACE",
     "--security-opt",
     "seccomp=unconfined"
-  ]
+  ],
+  // Environment variables for git configuration
+  "remoteEnv": {
+    "DEVBOX_USER_NAME": "${localEnv:DEVBOX_USER_NAME:Kirk Chen}",
+    "DEVBOX_USER_EMAIL": "${localEnv:DEVBOX_USER_EMAIL:rwk0119@yahoo.com.tw}"
+  }
 }

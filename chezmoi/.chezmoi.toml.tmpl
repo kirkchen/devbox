@@ -1,5 +1,22 @@
-{{- $name := promptStringOnce . "name" "What is your name" "Kirk Chen" -}}
-{{- $email := promptStringOnce . "email" "What is your email" -}}
+{{- /* Check Gitpod environment variables first */ -}}
+{{- $envName := env "DEVBOX_USER_NAME" | default "" -}}
+{{- $envEmail := env "DEVBOX_USER_EMAIL" | default "" -}}
+
+{{- /* Use env vars if available, otherwise prompt */ -}}
+{{- $name := "" -}}
+{{- $email := "" -}}
+
+{{- if $envName -}}
+    {{- $name = $envName -}}
+{{- else -}}
+    {{- $name = promptStringOnce . "name" "What is your name" "Kirk Chen" -}}
+{{- end -}}
+
+{{- if $envEmail -}}
+    {{- $email = $envEmail -}}
+{{- else -}}
+    {{- $email = promptStringOnce . "email" "What is your email" -}}
+{{- end -}}
 
 [data]
     # User information
