@@ -38,8 +38,8 @@
     },
     "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
   },
-  // Set up convenience alias and show welcome message
-  "postCreateCommand": "echo 'alias setup-dotfiles=\"bash /workspaces/devbox/.devcontainer/scripts/setup-dotfiles.sh\"' >> ~/.bashrc && echo 'alias setup-dotfiles=\"bash /workspaces/devbox/.devcontainer/scripts/setup-dotfiles.sh\"' >> ~/.zshrc && bash /workspaces/devbox/.devcontainer/scripts/welcome.sh",
+  // Set up dotfiles automatically if environment variables are set, otherwise show welcome message
+  "postCreateCommand": "echo 'alias setup-dotfiles=\"bash /workspaces/devbox/.devcontainer/scripts/setup-dotfiles.sh\"' >> ~/.bashrc && echo 'alias setup-dotfiles=\"bash /workspaces/devbox/.devcontainer/scripts/setup-dotfiles.sh\"' >> ~/.zshrc && if [ -n \"$DEVBOX_USER_NAME\" ] && [ -n \"$DEVBOX_USER_EMAIL\" ]; then bash /workspaces/devbox/install.sh; else bash /workspaces/devbox/.devcontainer/scripts/welcome.sh; fi",
   "remoteUser": "vscode",
   "runArgs": [
     "--cap-add=SYS_PTRACE",
