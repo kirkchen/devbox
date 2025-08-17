@@ -81,6 +81,12 @@ RUN apt-get update && apt-get install -y gpg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Install uv (fast Python package and project manager)
+# Using the official Docker image to get the binary
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Make sure the binaries are executable
+RUN chmod +x /bin/uv /bin/uvx
+
 # Switch back to dialog for any ad-hoc use of apt-get
 ENV DEBIAN_FRONTEND=dialog
 
