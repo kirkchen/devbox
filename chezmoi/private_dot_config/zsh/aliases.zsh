@@ -31,8 +31,3 @@ fi
 
 # Editor
 alias e="$EDITOR"
-
-# Safety nets
-alias rm='rm -i'
-alias cp='cp -i'
-alias mv='mv -i'
