@@ -82,28 +82,34 @@ if ! command -v chezmoi &> /dev/null; then
     echo ""
 fi
 
-# Determine source directory based on environment
-if [ "$ENV_TYPE" = "gitpod" ]; then
-    # In Gitpod, the workspace is usually at /workspace/<repo-name>
-    if [ -d "/workspace/devbox/chezmoi" ]; then
-        CHEZMOI_SOURCE_DIR="/workspace/devbox/chezmoi"
-    elif [ -d "$GITPOD_REPO_ROOT/chezmoi" ]; then
-        CHEZMOI_SOURCE_DIR="$GITPOD_REPO_ROOT/chezmoi"
-    elif [ -d "./chezmoi" ]; then
-        CHEZMOI_SOURCE_DIR="$(pwd)/chezmoi"
+# Determine chezmoi source directory
+if [ -n "$DEV_CHEZMOI_SOURCE_DIR" ]; then
+    # Use explicitly specified directory
+    if [ -d "$DEV_CHEZMOI_SOURCE_DIR" ]; then
+        CHEZMOI_SOURCE_DIR="$DEV_CHEZMOI_SOURCE_DIR"
+        echo "📍 Using specified chezmoi source directory"
     else
-        echo "❌ Could not find chezmoi source directory"
+        echo "❌ Specified DEV_CHEZMOI_SOURCE_DIR does not exist: $DEV_CHEZMOI_SOURCE_DIR"
         exit 1
     fi
-elif [ -d "/workspaces/devbox/chezmoi" ]; then
-    # DevContainer path
-    CHEZMOI_SOURCE_DIR="/workspaces/devbox/chezmoi"
-elif [ -d "./chezmoi" ]; then
-    # Local path
-    CHEZMOI_SOURCE_DIR="$(pwd)/chezmoi"
 else
-    echo "❌ Could not find chezmoi source directory"
-    exit 1
+    # Get the directory where this script is located
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    CHEZMOI_SOURCE_DIR="${SCRIPT_DIR}/chezmoi"
+    
+    # Verify the chezmoi directory exists
+    if [ ! -d "$CHEZMOI_SOURCE_DIR" ]; then
+        echo "❌ Could not find chezmoi directory at: $CHEZMOI_SOURCE_DIR"
+        echo ""
+        echo "   Expected structure:"
+        echo "   ${SCRIPT_DIR}/"
+        echo "   ├── install.sh (this script)"
+        echo "   └── chezmoi/"
+        echo ""
+        echo "   You can specify a different directory with:"
+        echo "   export DEV_CHEZMOI_SOURCE_DIR=/path/to/chezmoi"
+        exit 1
+    fi
 fi
 
 echo "📂 Using chezmoi source: $CHEZMOI_SOURCE_DIR"
