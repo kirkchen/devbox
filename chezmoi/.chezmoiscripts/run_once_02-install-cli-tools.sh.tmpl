@@ -19,9 +19,18 @@ if command_exists brew; then
     command_exists bat || brew install bat
     command_exists ag || brew install the_silver_searcher
     command_exists tig || brew install tig
-    command_exists diff-so-fancy || brew install diff-so-fancy
     command_exists htop || brew install htop
     command_exists direnv || brew install direnv
+    
+    # diff-so-fancy via npm (for consistency across platforms)
+    if ! command_exists diff-so-fancy; then
+        echo "Installing diff-so-fancy..."
+        if command_exists npm; then
+            npm install -g diff-so-fancy
+        else
+            echo "⚠️ npm not found. Skipping diff-so-fancy installation."
+        fi
+    fi
     
     # Set up fzf key bindings if fzf was installed via brew
     if [ -d "$(brew --prefix)/opt/fzf" ] && [ ! -f "$HOME/.fzf.zsh" ]; then
