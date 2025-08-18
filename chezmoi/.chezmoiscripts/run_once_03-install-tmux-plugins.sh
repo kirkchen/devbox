@@ -14,9 +14,17 @@ if [ ! -d "$HOME/.tmux/plugins/tpm" ]; then
     echo "Installing TPM..."
     git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
     echo "✅ TPM installed successfully"
-    echo "💡 To install tmux plugins, start tmux and press prefix + I (Ctrl-a + I)"
 else
     echo "✅ TPM already installed"
+fi
+
+# Automatically install all tmux plugins
+echo "📦 Installing tmux plugins..."
+if [ -f "$HOME/.tmux/plugins/tpm/bin/install_plugins" ]; then
+    "$HOME/.tmux/plugins/tpm/bin/install_plugins"
+    echo "✅ All tmux plugins installed successfully"
+else
+    echo "⚠️ TPM install script not found. Plugins will be installed on first tmux launch."
 fi
 
 echo "✅ Tmux plugin setup complete!"
