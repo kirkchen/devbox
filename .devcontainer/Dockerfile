@@ -21,6 +21,8 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     # Additional useful tools
     jq \
     unzip \
+    # Environment management
+    direnv \
     # Dependencies for building Vim
     libncurses5-dev \
     libgtk2.0-dev \
@@ -80,6 +82,10 @@ RUN apt-get update && apt-get install -y gpg \
     && apt-get install -y eza \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Install diff-so-fancy (better git diff)
+RUN curl -L https://raw.githubusercontent.com/so-fancy/diff-so-fancy/master/third_party/build_fatpack/diff-so-fancy -o /usr/local/bin/diff-so-fancy \
+    && chmod +x /usr/local/bin/diff-so-fancy
 
 # Install uv (fast Python package and project manager)
 # Using the official Docker image to get the binary

@@ -3,23 +3,29 @@ set -e
 
 echo "🛠️ Installing CLI tools..."
 
+# Helper function to check if command exists
+command_exists() {
+    command -v "$1" &> /dev/null
+}
+
 {{- if eq .chezmoi.os "darwin" }}
 # macOS: Install using Homebrew
-if command -v brew &> /dev/null; then
+if command_exists brew; then
     echo "📦 Installing tools via Homebrew..."
     
-    # Core tools
-    brew list fzf &>/dev/null || brew install fzf
-    brew list eza &>/dev/null || brew install eza  # Modern ls replacement
-    brew list bat &>/dev/null || brew install bat
-    brew list the_silver_searcher &>/dev/null || brew install the_silver_searcher
-    brew list tig &>/dev/null || brew install tig
-    brew list diff-so-fancy &>/dev/null || brew install diff-so-fancy
-    brew list htop &>/dev/null || brew install htop
-    brew list direnv &>/dev/null || brew install direnv
+    # Check and install each tool individually
+    command_exists fzf || brew install fzf
+    command_exists eza || brew install eza
+    command_exists bat || brew install bat
+    command_exists ag || brew install the_silver_searcher
+    command_exists tig || brew install tig
+    command_exists diff-so-fancy || brew install diff-so-fancy
+    command_exists htop || brew install htop
+    command_exists direnv || brew install direnv
     
-    # Set up fzf key bindings and fuzzy completion
-    if [ -d "$(brew --prefix)/opt/fzf" ]; then
+    # Set up fzf key bindings if fzf was installed via brew
+    if [ -d "$(brew --prefix)/opt/fzf" ] && [ ! -f "$HOME/.fzf.zsh" ]; then
+        echo "Setting up fzf key bindings..."
         $(brew --prefix)/opt/fzf/install --key-bindings --completion --no-update-rc --no-bash --no-fish 2>/dev/null || true
     fi
 else
@@ -27,28 +33,26 @@ else
 fi
 
 {{- else if eq .chezmoi.os "linux" }}
-# Linux: Install using apt or other package managers
-if command -v apt-get &> /dev/null; then
-    echo "📦 Installing tools via apt..."
+# Linux: Install using apt or other methods
+if command_exists apt-get; then
+    echo "📦 Installing tools via apt and other sources..."
     
-    # Update package list
-    sudo apt-get update
-    
-    # Install core tools
     # fzf
-    if ! command -v fzf &> /dev/null; then
-        sudo apt-get install -y fzf || {
+    if ! command_exists fzf; then
+        if apt-cache show fzf &>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y fzf
+        else
             echo "Installing fzf from git..."
             git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
             ~/.fzf/install --all --no-bash --no-fish
-        }
+        fi
     fi
     
-    # eza (modern ls replacement)
-    if ! command -v eza &> /dev/null; then
+    # eza (if not already installed)
+    if ! command_exists eza; then
         echo "Installing eza..."
-        # Install eza from official repo
-        sudo apt-get install -y gpg
+        sudo apt-get update && sudo apt-get install -y gpg
+        sudo mkdir -p /etc/apt/keyrings
         wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | sudo gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
         echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" | sudo tee /etc/apt/sources.list.d/gierens.list
         sudo chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list
@@ -56,44 +60,51 @@ if command -v apt-get &> /dev/null; then
         sudo apt-get install -y eza || echo "Failed to install eza"
     fi
     
-    # bat (better cat)
-    if ! command -v bat &> /dev/null; then
-        sudo apt-get install -y bat || echo "bat not available in apt"
+    # bat
+    if ! command_exists bat && ! command_exists batcat; then
+        sudo apt-get update && sudo apt-get install -y bat
         # On some systems, bat is installed as batcat
-        if command -v batcat &> /dev/null; then
+        if command_exists batcat && ! command_exists bat; then
             mkdir -p ~/.local/bin
             ln -sf $(which batcat) ~/.local/bin/bat
         fi
     fi
     
-    # ag (silver searcher)
-    sudo apt-get install -y silversearcher-ag
+    # Basic tools via apt (only install if not present)
+    sudo apt-get update
+    command_exists ag || sudo apt-get install -y silversearcher-ag
+    command_exists tig || sudo apt-get install -y tig
+    command_exists htop || sudo apt-get install -y htop
+    command_exists direnv || sudo apt-get install -y direnv
     
-    # tig (git text interface)
-    sudo apt-get install -y tig
-    
-    # htop
-    sudo apt-get install -y htop
-    
-    # direnv
-    if ! command -v direnv &> /dev/null; then
-        sudo apt-get install -y direnv || {
-            echo "Installing direnv from binary..."
-            curl -sfL https://direnv.net/install.sh | bash
-        }
-    fi
-    
-    # diff-so-fancy
-    if ! command -v diff-so-fancy &> /dev/null; then
+    # diff-so-fancy (if not already installed)
+    if ! command_exists diff-so-fancy; then
         echo "Installing diff-so-fancy..."
-        npm install -g diff-so-fancy 2>/dev/null || {
-            # Alternative: Download directly
+        if command_exists npm; then
+            npm install -g diff-so-fancy 2>/dev/null || {
+                # Alternative: Download directly
+                sudo curl -L https://raw.githubusercontent.com/so-fancy/diff-so-fancy/master/third_party/build_fatpack/diff-so-fancy -o /usr/local/bin/diff-so-fancy
+                sudo chmod +x /usr/local/bin/diff-so-fancy
+            }
+        else
+            # Download directly
             sudo curl -L https://raw.githubusercontent.com/so-fancy/diff-so-fancy/master/third_party/build_fatpack/diff-so-fancy -o /usr/local/bin/diff-so-fancy
             sudo chmod +x /usr/local/bin/diff-so-fancy
-        }
+        fi
     fi
 fi
 
 {{- end }}
 
 echo "✅ CLI tools installation complete!"
+
+# Summary of installed tools
+echo ""
+echo "📋 Tool status:"
+for tool in fzf eza bat ag tig diff-so-fancy htop direnv; do
+    if command_exists "$tool" || ([ "$tool" = "bat" ] && command_exists batcat); then
+        echo "  ✅ $tool"
+    else
+        echo "  ❌ $tool (not found)"
+    fi
+done
