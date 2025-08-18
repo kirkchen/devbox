@@ -84,8 +84,8 @@ RUN apt-get update && apt-get install -y gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install diff-so-fancy (better git diff)
-RUN curl -L https://raw.githubusercontent.com/so-fancy/diff-so-fancy/master/third_party/build_fatpack/diff-so-fancy -o /usr/local/bin/diff-so-fancy \
-    && chmod +x /usr/local/bin/diff-so-fancy
+# Note: Installing via npm for better reliability
+# This will be installed globally after node/npm are available
 
 # Install uv (fast Python package and project manager)
 # Using the official Docker image to get the binary

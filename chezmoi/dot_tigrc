@@ -14,7 +14,7 @@ set diff-options = -m --first-parent
 set editor-line-number = yes
 set refresh-mode = auto
 
-set diff-highlight = true
+set diff-highlight = false
 color  diff-header       default magenta
 color  diff-chunk        black   white
 

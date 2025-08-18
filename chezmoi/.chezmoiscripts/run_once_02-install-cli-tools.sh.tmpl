@@ -81,15 +81,9 @@ if command_exists apt-get; then
     if ! command_exists diff-so-fancy; then
         echo "Installing diff-so-fancy..."
         if command_exists npm; then
-            npm install -g diff-so-fancy 2>/dev/null || {
-                # Alternative: Download directly
-                sudo curl -L https://raw.githubusercontent.com/so-fancy/diff-so-fancy/master/third_party/build_fatpack/diff-so-fancy -o /usr/local/bin/diff-so-fancy
-                sudo chmod +x /usr/local/bin/diff-so-fancy
-            }
+            npm install -g diff-so-fancy
         else
-            # Download directly
-            sudo curl -L https://raw.githubusercontent.com/so-fancy/diff-so-fancy/master/third_party/build_fatpack/diff-so-fancy -o /usr/local/bin/diff-so-fancy
-            sudo chmod +x /usr/local/bin/diff-so-fancy
+            echo "⚠️ npm not found. Skipping diff-so-fancy installation."
         fi
     fi
 fi
