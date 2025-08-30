@@ -36,7 +36,6 @@
     "ghcr.io/devcontainers/features/node:1": {
       "version": "20"
     },
-    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
     "ghcr.io/schlich/devcontainer-features/playwright:0": {}
   },
   // Set up dotfiles automatically if environment variables are set, otherwise show welcome message

@@ -22,14 +22,21 @@ if command_exists brew; then
     command_exists htop || brew install htop
     command_exists direnv || brew install direnv
     
-    # diff-so-fancy via npm (for consistency across platforms)
-    if ! command_exists diff-so-fancy; then
-        echo "Installing diff-so-fancy..."
-        if command_exists npm; then
+    # npm-based tools (for consistency across platforms)
+    if command_exists npm; then
+        # diff-so-fancy
+        if ! command_exists diff-so-fancy; then
+            echo "Installing diff-so-fancy..."
             npm install -g diff-so-fancy
-        else
-            echo "⚠️ npm not found. Skipping diff-so-fancy installation."
         fi
+        
+        # Claude Code CLI
+        if ! command_exists claude; then
+            echo "Installing Claude Code CLI..."
+            npm install -g @anthropic-ai/claude-code
+        fi
+    else
+        echo "⚠️ npm not found. Skipping npm-based tools (diff-so-fancy, claude-code)."
     fi
     
     # Set up fzf key bindings if fzf was installed via brew
@@ -86,14 +93,21 @@ if command_exists apt-get; then
     command_exists htop || sudo apt-get install -y htop
     command_exists direnv || sudo apt-get install -y direnv
     
-    # diff-so-fancy (if not already installed)
-    if ! command_exists diff-so-fancy; then
-        echo "Installing diff-so-fancy..."
-        if command_exists npm; then
+    # npm-based tools (for consistency across platforms)
+    if command_exists npm; then
+        # diff-so-fancy
+        if ! command_exists diff-so-fancy; then
+            echo "Installing diff-so-fancy..."
             npm install -g diff-so-fancy
-        else
-            echo "⚠️ npm not found. Skipping diff-so-fancy installation."
         fi
+        
+        # Claude Code CLI
+        if ! command_exists claude; then
+            echo "Installing Claude Code CLI..."
+            npm install -g @anthropic-ai/claude-code
+        fi
+    else
+        echo "⚠️ npm not found. Skipping npm-based tools (diff-so-fancy, claude-code)."
     fi
 fi
 
@@ -104,7 +118,7 @@ echo "✅ CLI tools installation complete!"
 # Summary of installed tools
 echo ""
 echo "📋 Tool status:"
-for tool in fzf eza bat ag tig diff-so-fancy htop direnv; do
+for tool in fzf eza bat ag tig diff-so-fancy claude htop direnv; do
     if command_exists "$tool" || ([ "$tool" = "bat" ] && command_exists batcat); then
         echo "  ✅ $tool"
     else
