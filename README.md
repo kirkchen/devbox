@@ -5,6 +5,7 @@ A minimal, robust development container setup with intelligent cross-platform do
 ## Features
 
 - 🐳 **DevContainer**: Pre-configured Ubuntu 22.04 environment with VS Code integration
+- 📦 **Prebuilt Image**: Published to GitHub Container Registry for fast startup in other projects
 - 🔧 **Chezmoi**: Smart dotfiles management with automatic environment detection
 - 🚀 **Oh-My-Zsh**: Bullet-train theme with essential plugins
 - 🛠️ **Modern CLI Tools**: fzf, eza, bat, ag, tig, and more
@@ -14,7 +15,26 @@ A minimal, robust development container setup with intelligent cross-platform do
 
 ## Quick Start
 
-### Using DevContainer (Recommended)
+### Option 1: Use Prebuilt Image in Your Projects (Fastest)
+
+For the fastest setup in your other projects, use the prebuilt image from GitHub Container Registry:
+
+1. Copy the `.devcontainer/devcontainer.json` from this repo to your project
+2. Replace the `build` section with:
+   ```json
+   "image": "ghcr.io/kirkchen/devbox-devcontainer:latest"
+   ```
+3. Keep only the features you need (most are already in the image):
+   ```json
+   "features": {
+     "ghcr.io/schlich/devcontainer-features/playwright:0": {}
+   }
+   ```
+4. Open in VS Code with Dev Containers extension
+
+**Startup time: ~30 seconds** instead of 5-10 minutes!
+
+### Option 2: Using This DevContainer (Development)
 
 1. Open this folder in VS Code
 2. Install the "Dev Containers" extension if not already installed
@@ -22,18 +42,20 @@ A minimal, robust development container setup with intelligent cross-platform do
 4. After the container builds, run `setup-dotfiles` to configure your environment
 5. Follow the prompts to enter your name and email
 
-### Local Setup (macOS/Linux)
+### Option 3: Local Setup (macOS/Linux)
 
 1. Install Chezmoi:
+
    ```bash
    # macOS
    brew install chezmoi
-   
+
    # Linux
    sh -c "$(curl -fsLS get.chezmoi.io)"
    ```
 
 2. Initialize from this repository:
+
    ```bash
    # From the devbox directory
    chezmoi init --source="./chezmoi" --apply
@@ -42,6 +64,21 @@ A minimal, robust development container setup with intelligent cross-platform do
 3. Follow the interactive prompts to configure:
    - Your name
    - Your email
+
+## Prebuilt Image
+
+This repository automatically publishes a prebuilt Docker image to GitHub Container Registry, perfect for use in other projects.
+
+### Available Image
+
+- `ghcr.io/kirkchen/devbox-devcontainer:latest`
+
+### Automatic Updates
+
+GitHub Actions automatically builds and publishes new images when:
+
+- `.devcontainer/Dockerfile` is modified (pushed to main branch)
+- Manually triggered via GitHub Actions
 
 ## Directory Structure
 
@@ -53,6 +90,9 @@ devbox/
 │   └── scripts/
 │       ├── setup-dotfiles.sh # Interactive dotfiles setup
 │       └── welcome.sh       # Welcome message
+├── .github/
+│   └── workflows/
+│       └── build-devcontainer.yml # Automated image building
 ├── chezmoi/                 # Chezmoi-managed dotfiles
 │   ├── .chezmoi.toml.tmpl   # Interactive configuration template
 │   ├── .chezmoiignore       # Files to ignore
@@ -75,11 +115,13 @@ devbox/
 ## Included Tools
 
 ### Shell & Terminal
+
 - **Zsh**: Modern shell with Oh-My-Zsh framework
 - **Tmux**: Terminal multiplexer with resurrect and continuum plugins
 - **Theme**: Bullet-train theme with proper font support
 
 ### CLI Tools
+
 - **fzf**: Fuzzy finder with intelligent fallback (ag → rg → find)
 - **eza**: Modern replacement for ls (successor to exa)
 - **bat**: Cat with syntax highlighting (multi-architecture support)
@@ -90,6 +132,7 @@ devbox/
 - **direnv**: Environment variable management
 
 ### Development
+
 - **Git**: Version control with defensive aliases
 - **Vim**: Text editor with essential plugins (NERDTree, fzf.vim, CoC)
 - **VS Code**: Integrated with DevContainer
@@ -99,6 +142,7 @@ devbox/
 ### Interactive Setup
 
 When you first run `chezmoi init` or `setup-dotfiles`, you'll be prompted for:
+
 - **Name**: Used in Git commits and configurations
 - **Email**: Used in Git configuration
 
@@ -107,6 +151,7 @@ The system automatically detects your environment (macOS, Linux, or DevContainer
 ### Custom Aliases
 
 Common Git aliases with defensive programming:
+
 - `gs` - git status
 - `gd` - git diff with fancy output (fallback to standard diff)
 - `gcoi` - interactive checkout with fzf
@@ -118,6 +163,7 @@ Common Git aliases with defensive programming:
 ### Vim Configuration
 
 Pre-configured with:
+
 - Sonokai color scheme
 - File explorer (NERDTree)
 - Fuzzy search (fzf.vim)
@@ -127,20 +173,24 @@ Pre-configured with:
 ## Fonts
 
 For the best terminal experience, install a Nerd Font:
+
 - [SauceCodePro Nerd Font](https://github.com/ryanoasis/nerd-fonts/tree/master/patched-fonts/SourceCodePro)
 - [MesloLGS NF](https://github.com/romkatv/powerlevel10k#meslo-nerd-font-patched-for-powerlevel10k)
 
 ## Updating Dotfiles
 
 ### Modify Templates
+
 1. Edit files in the `chezmoi/` directory
 2. Apply changes: `chezmoi apply`
 
 ### Add New Files
+
 1. Add to chezmoi: `chezmoi add ~/.config/newfile`
 2. Commit changes to repository
 
 ### Sync Across Machines
+
 ```bash
 # Pull latest changes
 cd ~/Code/Temp/devbox
@@ -153,6 +203,7 @@ chezmoi apply --source="./chezmoi"
 ## Key Features
 
 ### Defensive Programming
+
 - **Command existence checks**: Aliases only created if commands exist
 - **Intelligent fallbacks**: FZF uses ag → rg → find chain
 - **Confirmation prompts**: Destructive operations require confirmation
@@ -160,7 +211,9 @@ chezmoi apply --source="./chezmoi"
 - **Platform detection**: Automatic environment adaptation
 
 ### Environment Detection
+
 The configuration automatically detects and adapts to:
+
 - **macOS**: Homebrew paths, macOS-specific tools
 - **Linux**: APT/DNF package managers, Linux paths
 - **DevContainer**: Container-optimized settings
@@ -168,12 +221,15 @@ The configuration automatically detects and adapts to:
 ## Troubleshooting
 
 ### Font Issues
+
 If Powerline symbols don't align:
+
 1. Install a Nerd Font (see Fonts section)
 2. Set terminal font to the Mono variant
 3. Restart terminal
 
 ### Permission Issues
+
 ```bash
 # Fix script permissions
 chmod +x .devcontainer/scripts/*.sh
@@ -181,6 +237,7 @@ chmod +x chezmoi/.chezmoiscripts/*.sh
 ```
 
 ### Chezmoi Not Found
+
 ```bash
 # Install manually
 curl -fsLS get.chezmoi.io | sh
@@ -188,7 +245,9 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### Tool Not Available
+
 The configuration includes fallbacks for missing tools:
+
 - If `bat` is not available, `cat` works normally
 - If `eza` is not available, `ls` is used
 - If `ag` is not available, `rg` or `find` is used for FZF
