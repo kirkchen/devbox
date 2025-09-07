@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a dotfiles management repository using Chezmoi for cross-platform development environment configuration. It provides intelligent dotfiles that adapt to macOS, Linux, and DevContainer environments.
+This is a dotfiles management repository using Chezmoi for cross-platform development environment configuration. It provides intelligent dotfiles that adapt to macOS, Linux, and DevContainer environments with automatic setup for modern CLI tools, Zsh/Oh-My-Zsh, and development utilities.
 
 ## Installation
 
@@ -29,6 +29,16 @@ The install script automatically detects:
 
 ## Key Commands
 
+### Installation & Setup
+
+```bash
+# Automated installation (when git user/email are pre-configured)
+./install.sh
+
+# Interactive installation (prompts for name/email)
+.devcontainer/scripts/setup-dotfiles.sh
+```
+
 ### Gitpod Environment Management
 
 ```bash
@@ -46,6 +56,8 @@ gpsh  # gpenv ssh
 gpo   # gpenv open
 gpl   # gpenv list
 ```
+
+The `gpenv` function uses fzf for interactive selection when starting, stopping, or connecting to environments.
 
 ### Chezmoi Dotfiles Management
 
@@ -118,7 +130,8 @@ Chezmoi uses special prefixes in filenames:
 2. chezmoi/dot_zshrc.tmpl        # Main shell entry point
    ├── ~/.config/zsh/oh-my-zsh.zsh  # Oh-My-Zsh configuration
    ├── ~/.config/zsh/core.zsh       # Core tools (fzf, direnv, etc.)
-   └── ~/.config/zsh/aliases.zsh    # Command aliases
+   ├── ~/.config/zsh/aliases.zsh    # Command aliases
+   └── ~/.config/zsh/gitpod.zsh     # Gitpod environment management
 3. ~/.zshrc.local                # Local overrides (not managed)
 ```
 
@@ -149,6 +162,29 @@ fi
 - Destructive operations require confirmation
 - Branch operations include namespace filtering
 
+## DevContainer & CI/CD
+
+### Prebuilt Image
+
+The repository publishes a prebuilt Docker image to GitHub Container Registry:
+- **Image**: `ghcr.io/kirkchen/devbox-devcontainer:latest`
+- **Build Trigger**: Changes to `.devcontainer/Dockerfile` on main branch or manual workflow dispatch
+- **Platforms**: linux/amd64, linux/arm64
+
+### Using Prebuilt Image in Other Projects
+
+1. Copy `.devcontainer/devcontainer.json` to your project
+2. Replace the `build` section with:
+   ```json
+   "image": "ghcr.io/kirkchen/devbox-devcontainer:latest"
+   ```
+3. Keep only additional features needed:
+   ```json
+   "features": {
+     "ghcr.io/schlich/devcontainer-features/playwright:0": {}
+   }
+   ```
+
 ## Development Workflow
 
 When modifying dotfiles:
@@ -164,3 +200,22 @@ When adding new configurations:
 2. Add to chezmoi: `chezmoi add ~/path/to/file --source="./chezmoi"`
 3. Convert to template if needed for cross-platform support
 4. Document any new dependencies in README.md
+
+## Included Tools
+
+The DevContainer and dotfiles include:
+
+### Shell & Terminal
+- **Zsh** with Oh-My-Zsh (bullet-train theme)
+- **Tmux** with resurrect and continuum plugins
+- **Vim** with NERDTree, fzf.vim, CoC
+
+### CLI Tools
+- **fzf**: Fuzzy finder (uses ag → rg → find fallback chain)
+- **eza**: Modern ls replacement
+- **bat**: Syntax-highlighted cat
+- **ag**: The Silver Searcher
+- **tig**: Git text-mode interface
+- **diff-so-fancy**: Better git diffs
+- **direnv**: Environment variable management
+- **Claude Code CLI**: Installed automatically with global settings
