@@ -1,11 +1,14 @@
-{{- /* Check Gitpod environment variables first */ -}}
+{{- /* Environment variables */ -}}
 {{- $envName := env "DEVBOX_USER_NAME" | default "" -}}
 {{- $envEmail := env "DEVBOX_USER_EMAIL" | default "" -}}
+{{- $envGithubToken := env "GITHUB_TOKEN" | default "" -}}
 
-{{- /* Use env vars if available, otherwise prompt */ -}}
+{{- /* Initialize variables */ -}}
 {{- $name := "" -}}
 {{- $email := "" -}}
+{{- $githubToken := "" -}}
 
+{{- /* Use env vars if available, otherwise prompt */ -}}
 {{- if $envName -}}
     {{- $name = $envName -}}
 {{- else -}}
@@ -16,6 +19,12 @@
     {{- $email = $envEmail -}}
 {{- else -}}
     {{- $email = promptStringOnce . "email" "What is your email" -}}
+{{- end -}}
+
+{{- if $envGithubToken -}}
+    {{- $githubToken = $envGithubToken -}}
+{{- else -}}
+    {{- $githubToken = promptStringOnce . "github_token" "GitHub Token (optional, press enter to skip)" "" -}}
 {{- end -}}
 
 [data]
@@ -35,3 +44,6 @@
     is_arm = {{ eq .chezmoi.arch "arm64" }}
     is_devcontainer = {{ or (env "REMOTE_CONTAINERS") (env "CODESPACES") | default false }}
     is_wsl = {{ or (env "WSL_DISTRO_NAME") (env "IS_WSL") | default false }}
+    
+    # GitHub Token for MCP server (already set above)
+    github_token = {{ $githubToken | quote }}

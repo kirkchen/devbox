@@ -1,0 +1,13 @@
+{
+  "model": "opus",
+  "permissions": {
+    "allowedTools": [
+    ],
+    "deny": [
+      "Read(.env*)",
+      "Read(**/secrets/**)",
+      "Write(.env*)",
+      "Bash(rm -rf /)"
+    ]
+  }
+}

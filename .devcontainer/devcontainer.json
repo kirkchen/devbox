@@ -46,9 +46,10 @@
     "--security-opt",
     "seccomp=unconfined"
   ],
-  // Environment variables for git configuration
+  // Environment variables for git configuration and Claude Code
   "remoteEnv": {
     "DEVBOX_USER_NAME": "${localEnv:DEVBOX_USER_NAME:Kirk Chen}",
-    "DEVBOX_USER_EMAIL": "${localEnv:DEVBOX_USER_EMAIL:rwk0119@yahoo.com.tw}"
+    "DEVBOX_USER_EMAIL": "${localEnv:DEVBOX_USER_EMAIL:rwk0119@yahoo.com.tw}",
+    "GITHUB_TOKEN": "${localEnv:GITHUB_TOKEN}"
   }
 }
