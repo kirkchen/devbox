@@ -24,40 +24,10 @@ The install script automatically detects:
 
 ```bash
 # For local setup or when user info is not pre-configured
-.devcontainer/scripts/setup-dotfiles.sh
+chezmoi init --source="./chezmoi" --apply
 ```
 
 ## Key Commands
-
-### Installation & Setup
-
-```bash
-# Automated installation (when git user/email are pre-configured)
-./install.sh
-
-# Interactive installation (prompts for name/email)
-.devcontainer/scripts/setup-dotfiles.sh
-```
-
-### Gitpod Environment Management
-
-```bash
-# Interactive Gitpod environment management
-gpenv start   # Start a stopped environment and optionally SSH into it
-gpenv stop    # Stop a running environment
-gpenv ssh     # SSH into a running environment
-gpenv open    # Open a running environment in browser
-gpenv list    # List all environments
-
-# Shortcut aliases
-gps   # gpenv start
-gpt   # gpenv stop  
-gpsh  # gpenv ssh
-gpo   # gpenv open
-gpl   # gpenv list
-```
-
-The `gpenv` function uses fzf for interactive selection when starting, stopping, or connecting to environments.
 
 ### Chezmoi Dotfiles Management
 
@@ -66,30 +36,25 @@ The `gpenv` function uses fzf for interactive selection when starting, stopping,
 chezmoi apply --source="./chezmoi"
 
 # Test changes without applying (dry run)
-chezmoi apply --source="./chezmoi" --dry-run --verbose
-
-# See what would change
 chezmoi diff --source="./chezmoi"
+
+# Re-run initialization (prompts for name/email/github_token)
+chezmoi init --source="./chezmoi" --apply
 
 # Add a new dotfile to management
 chezmoi add ~/.newconfig --source="./chezmoi"
-
-# Re-run initialization (prompts for name/email)
-chezmoi init --source="./chezmoi" --apply
 ```
 
-### Testing Configuration Changes
+### Gitpod Environment Management (Linux/DevContainer only)
 
 ```bash
-# Validate template syntax
-chezmoi execute-template < chezmoi/dot_zshrc.tmpl
+gpenv start   # Start a stopped environment and optionally SSH into it
+gpenv stop    # Stop a running environment
+gpenv ssh     # SSH into a running environment
+gpenv open    # Open a running environment in browser
+gpenv list    # List all environments
 
-# Test specific template with data
-echo '{"name": "Test", "email": "test@example.com", "is_devcontainer": false}' | chezmoi execute-template --init < chezmoi/dot_gitconfig.tmpl
-
-# Check shell configuration syntax
-zsh -n chezmoi/dot_zshrc.tmpl
-bash -n chezmoi/private_dot_config/zsh/aliases.zsh
+# Shortcut aliases: gps, gpt, gpsh, gpo, gpl
 ```
 
 ## Architecture
@@ -101,17 +66,9 @@ The repository uses Chezmoi's templating system with Go templates for environmen
 - **Template Files** (`*.tmpl`): Contain conditional logic for different environments
 - **Template Variables**:
   - `.name` and `.email`: User-provided during init
-  - `.chezmoi.os`: Operating system ("darwin", "linux", "windows")
+  - `.github_token`: Optional, for Claude Code MCP server
+  - `.chezmoi.os`: Operating system ("darwin", "linux")
   - `.is_devcontainer`: Custom variable for DevContainer detection
-  - `.chezmoi.hostname`: System hostname
-
-### Environment Detection Flow
-
-1. **chezmoi/.chezmoi.toml.tmpl**: Interactive configuration that prompts for user data
-2. **Environment Variables**: Automatically populated by Chezmoi:
-   - OS detection via `.chezmoi.os`
-   - DevContainer detection via environment variables
-3. **Conditional Application**: Templates use `{{- if }}` blocks to apply platform-specific configs
 
 ### File Naming Conventions
 
@@ -126,13 +83,32 @@ Chezmoi uses special prefixes in filenames:
 ### Configuration Hierarchy
 
 ```
-1. chezmoi/.chezmoi.toml.tmpl    # User configuration (name, email)
-2. chezmoi/dot_zshrc.tmpl        # Main shell entry point
-   ├── ~/.config/zsh/oh-my-zsh.zsh  # Oh-My-Zsh configuration
-   ├── ~/.config/zsh/core.zsh       # Core tools (fzf, direnv, etc.)
-   ├── ~/.config/zsh/aliases.zsh    # Command aliases
-   └── ~/.config/zsh/gitpod.zsh     # Gitpod environment management
-3. ~/.zshrc.local                # Local overrides (not managed)
+chezmoi/.chezmoi.toml.tmpl       # User configuration (name, email, github_token)
+chezmoi/dot_zshrc.tmpl           # Main shell entry point
+├── ~/.config/zsh/oh-my-zsh.zsh  # Oh-My-Zsh configuration
+├── ~/.config/zsh/core.zsh       # Core tools (fzf, direnv)
+├── ~/.config/zsh/tools.zsh      # macOS: Homebrew, rbenv, NVM, pnpm
+├── ~/.config/zsh/functions.zsh  # Cross-platform: now(), fixup()
+├── ~/.config/zsh/functions-macos.zsh  # macOS: code()
+├── ~/.config/zsh/aliases.zsh    # Git, K8s, tools aliases
+└── ~/.config/zsh/gitpod.zsh     # Linux: Gitpod environment management
+~/.zshrc.local                   # Local overrides (not managed)
+```
+
+### Platform-Specific Loading
+
+```
+macOS (.chezmoi.os == "darwin"):
+├── tools.zsh           ✓ (Homebrew, rbenv, NVM, pnpm)
+├── functions-macos.zsh ✓ (code function)
+├── raycast/scripts/    ✓ (wifi scripts)
+└── gitpod.zsh          ✗
+
+Linux/DevContainer:
+├── tools.zsh           ✗
+├── functions-macos.zsh ✗
+├── raycast/scripts/    ✗
+└── gitpod.zsh          ✓
 ```
 
 ## Important Patterns
@@ -151,24 +127,30 @@ Chezmoi uses special prefixes in filenames:
 
 ```bash
 # Check if command exists before creating alias
-if command -v bat &> /dev/null; then
+if command -v bat &>/dev/null; then
     alias cat='bat --style=plain'
 fi
+
+# Check if directory exists before sourcing
+[[ -d "$HOME/.rbenv" ]] && eval "$(rbenv init -)"
 ```
 
-### Git Aliases with Safety
+### Git Aliases
 
-- Interactive operations use `fzf` with fallback to current state
-- Destructive operations require confirmation
-- Branch operations include namespace filtering
+All git aliases include Traditional Chinese comments:
+
+```bash
+alias gbr="git branch"     # 列出分支
+alias gcbr="..."           # 顯示目前分支名稱
+alias gcoi="..."           # 互動式切換分支
+```
 
 ## DevContainer & CI/CD
 
 ### Prebuilt Image
 
-The repository publishes a prebuilt Docker image to GitHub Container Registry:
 - **Image**: `ghcr.io/kirkchen/devbox-devcontainer:latest`
-- **Build Trigger**: Changes to `.devcontainer/Dockerfile` on main branch or manual workflow dispatch
+- **Build Trigger**: Changes to `.devcontainer/Dockerfile` on main branch
 - **Platforms**: linux/amd64, linux/arm64
 
 ### Using Prebuilt Image in Other Projects
@@ -178,12 +160,29 @@ The repository publishes a prebuilt Docker image to GitHub Container Registry:
    ```json
    "image": "ghcr.io/kirkchen/devbox-devcontainer:latest"
    ```
-3. Keep only additional features needed:
-   ```json
-   "features": {
-     "ghcr.io/schlich/devcontainer-features/playwright:0": {}
-   }
-   ```
+
+## Claude Code Configuration
+
+### Settings (`~/.claude/settings.json`)
+
+- **statusLine**: Shows `🌿 branch | model | directory`
+- **enabledPlugins**: code-review, superpowers
+- **language**: Traditional Chinese (zh-TW)
+- **permissions.deny**: Blocks `.env*`, `secrets/`, `rm -rf /`
+
+### MCP Servers (`~/.claude.json`)
+
+- **sequential-thinking**: For complex reasoning
+- **playwright**: Browser automation
+- **context7**: Context management
+- **github**: GitHub integration (requires `github_token`)
+
+### Installation Scripts
+
+1. `run_once_01-install-oh-my-zsh.sh` - Oh-My-Zsh and plugins
+2. `run_once_02-install-cli-tools.sh` - CLI tools via Homebrew/apt
+3. `run_once_03-install-tmux-plugins.sh` - Tmux plugin manager
+4. `run_once_04-install-claude-plugins.sh` - Claude Code plugins
 
 ## Development Workflow
 
@@ -203,8 +202,6 @@ When adding new configurations:
 
 ## Included Tools
 
-The DevContainer and dotfiles include:
-
 ### Shell & Terminal
 - **Zsh** with Oh-My-Zsh (bullet-train theme)
 - **Tmux** with resurrect and continuum plugins
@@ -219,3 +216,8 @@ The DevContainer and dotfiles include:
 - **diff-so-fancy**: Better git diffs
 - **direnv**: Environment variable management
 - **Claude Code CLI**: Installed automatically with global settings
+
+### macOS Specific
+- **Homebrew**: Package manager
+- **rbenv/NVM/pnpm**: Language version managers (if installed)
+- **Raycast scripts**: WiFi management

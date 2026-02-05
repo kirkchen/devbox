@@ -12,6 +12,7 @@ A minimal, robust development container setup with intelligent cross-platform do
 - 🖥️ **Multi-Environment Support**: Automatic detection for macOS, Linux, and DevContainers
 - ⚙️ **Minimal Configuration**: Only asks for name and email
 - 🛡️ **Defensive Programming**: Robust error handling and fallback mechanisms
+- 🤖 **Claude Code Integration**: Pre-configured settings, plugins, and MCP servers
 
 ## Quick Start
 
@@ -64,21 +65,7 @@ For the fastest setup in your other projects, use the prebuilt image from GitHub
 3. Follow the interactive prompts to configure:
    - Your name
    - Your email
-
-## Prebuilt Image
-
-This repository automatically publishes a prebuilt Docker image to GitHub Container Registry, perfect for use in other projects.
-
-### Available Image
-
-- `ghcr.io/kirkchen/devbox-devcontainer:latest`
-
-### Automatic Updates
-
-GitHub Actions automatically builds and publishes new images when:
-
-- `.devcontainer/Dockerfile` is modified (pushed to main branch)
-- Manually triggered via GitHub Actions
+   - GitHub token (optional, for MCP server)
 
 ## Directory Structure
 
@@ -98,18 +85,31 @@ devbox/
 │   ├── .chezmoiignore       # Files to ignore
 │   ├── .chezmoiscripts/     # One-time setup scripts
 │   │   ├── run_once_01-install-oh-my-zsh.sh
-│   │   └── run_once_02-install-cli-tools.sh.tmpl
+│   │   ├── run_once_02-install-cli-tools.sh.tmpl
+│   │   ├── run_once_03-install-tmux-plugins.sh
+│   │   └── run_once_04-install-claude-plugins.sh
 │   ├── dot_gitconfig.tmpl   # Git configuration
 │   ├── dot_zshrc.tmpl       # Zsh configuration
+│   ├── dot_claude.json.tmpl # Claude Code MCP servers
 │   ├── dot_tmux.conf        # Tmux configuration
 │   ├── dot_vimrc            # Vim configuration
 │   ├── dot_tigrc            # Tig configuration
+│   ├── private_dot_claude/  # Claude Code settings
+│   │   ├── settings.json.tmpl
+│   │   ├── settings.md      # Settings documentation
+│   │   └── CLAUDE.md.tmpl   # Development guidelines
 │   └── private_dot_config/
-│       └── zsh/             # Modular Zsh configs
-│           ├── aliases.zsh
-│           ├── core.zsh.tmpl
-│           └── oh-my-zsh.zsh
-└── setup_zsh.sh             # Legacy setup script (fallback)
+│       ├── zsh/             # Modular Zsh configs
+│       │   ├── oh-my-zsh.zsh
+│       │   ├── core.zsh.tmpl
+│       │   ├── tools.zsh      # macOS: Homebrew, rbenv, NVM, pnpm
+│       │   ├── functions.zsh  # Cross-platform: now(), fixup()
+│       │   ├── functions-macos.zsh # macOS: code()
+│       │   ├── aliases.zsh    # Git, K8s, tools aliases
+│       │   └── gitpod.zsh     # Gitpod environment management
+│       └── raycast/
+│           └── scripts/       # macOS Raycast scripts
+└── install.sh               # Automated installation script
 ```
 
 ## Included Tools
@@ -136,6 +136,15 @@ devbox/
 - **Git**: Version control with defensive aliases
 - **Vim**: Text editor with essential plugins (NERDTree, fzf.vim, CoC)
 - **VS Code**: Integrated with DevContainer
+- **Claude Code**: Pre-configured with plugins and MCP servers
+
+### macOS Specific
+
+- **Homebrew**: Package manager integration
+- **rbenv**: Ruby version management (if installed)
+- **NVM**: Node.js version management (if installed)
+- **pnpm**: Fast package manager (if installed)
+- **Raycast**: WiFi management scripts
 
 ## Configuration
 
@@ -145,55 +154,106 @@ When you first run `chezmoi init` or `setup-dotfiles`, you'll be prompted for:
 
 - **Name**: Used in Git commits and configurations
 - **Email**: Used in Git configuration
+- **GitHub Token**: Optional, for Claude Code MCP server
 
 The system automatically detects your environment (macOS, Linux, or DevContainer) and configures accordingly.
 
-### Custom Aliases
+### Shell Aliases
 
-Common Git aliases with defensive programming:
+#### Git Aliases (with comments)
 
-- `gs` - git status
-- `gd` - git diff with fancy output (fallback to standard diff)
-- `gcoi` - interactive checkout with fzf
-- `gmi` - interactive merge with fzf
-- `gpsu` - push with upstream tracking
-- `gmdb` - delete branches with confirmation prompt
-- `cat` - uses bat with color when available
+| Alias | Command | Description |
+|-------|---------|-------------|
+| `gbr` | `git branch` | 列出分支 |
+| `gcbr` | `git rev-parse --abbrev-ref HEAD` | 顯示目前分支名稱 |
+| `gpsu` | `git push --set-upstream origin $(gcbr)` | 推送並設定 upstream |
+| `gcoi` | Interactive checkout with fzf | 互動式切換分支 |
+| `gmi` | Interactive merge with fzf | 互動式合併分支 |
+| `gmdb` | Delete branches by namespace | 刪除指定 namespace 的分支 |
+| `gdt` | `git difftool` | 開啟 diff 工具 |
+| `,,` | `cd $(git rev-parse --show-toplevel)` | 跳到 git repo 根目錄 |
 
-### Vim Configuration
+#### Kubernetes Aliases
+
+| Alias | Description |
+|-------|-------------|
+| `kctxi` | 互動式切換 Kubernetes context |
+| `knsi` | 互動式切換 Kubernetes namespace |
+
+#### Tool Aliases
+
+| Alias | Description |
+|-------|-------------|
+| `t` | tig |
+| `ts` | tig status |
+| `ta` | tig --all |
+| `mux` | tmuxinator |
+| `cat` | bat (if installed) |
+| `ls/ll/lt` | eza with icons (if installed) |
+
+### Shell Functions
+
+| Function | Description |
+|----------|-------------|
+| `now` | 輸出 UTC 時間戳記 (YYYYMMDDHHmmss) |
+| `fixup <msg>` | 建立 fixup commit 並自動 rebase |
+| `code [path]` | 用 VS Code 開啟檔案或目錄 (macOS) |
+
+### Gitpod Environment Management (Linux/DevContainer)
+
+```bash
+gpenv start   # Start a stopped environment and optionally SSH into it
+gpenv stop    # Stop a running environment
+gpenv ssh     # SSH into a running environment
+gpenv open    # Open a running environment in browser
+gpenv list    # List all environments
+
+# Shortcut aliases
+gps / gpt / gpsh / gpo / gpl
+```
+
+### Claude Code Configuration
 
 Pre-configured with:
 
-- Sonokai color scheme
-- File explorer (NERDTree)
-- Fuzzy search (fzf.vim)
-- Language support (CoC)
-- Git integration (fugitive)
+- **Status Line**: Shows `🌿 branch | model | directory`
+- **Plugins**: code-review, superpowers
+- **Language**: Traditional Chinese (zh-TW)
+- **Security**: Blocks reading `.env*` and `secrets/` files
+- **MCP Servers**: sequential-thinking, playwright, context7, github (if token provided)
 
-## Fonts
+## Prebuilt Image
 
-For the best terminal experience, install a Nerd Font:
+This repository automatically publishes a prebuilt Docker image to GitHub Container Registry, perfect for use in other projects.
 
-- [SauceCodePro Nerd Font](https://github.com/ryanoasis/nerd-fonts/tree/master/patched-fonts/SourceCodePro)
-- [MesloLGS NF](https://github.com/romkatv/powerlevel10k#meslo-nerd-font-patched-for-powerlevel10k)
+### Available Image
+
+- `ghcr.io/kirkchen/devbox-devcontainer:latest`
+
+### Automatic Updates
+
+GitHub Actions automatically builds and publishes new images when:
+
+- `.devcontainer/Dockerfile` is modified (pushed to main branch)
+- Manually triggered via GitHub Actions
 
 ## Updating Dotfiles
 
 ### Modify Templates
 
 1. Edit files in the `chezmoi/` directory
-2. Apply changes: `chezmoi apply`
+2. Apply changes: `chezmoi apply --source="./chezmoi"`
 
 ### Add New Files
 
-1. Add to chezmoi: `chezmoi add ~/.config/newfile`
+1. Add to chezmoi: `chezmoi add ~/.config/newfile --source="./chezmoi"`
 2. Commit changes to repository
 
 ### Sync Across Machines
 
 ```bash
 # Pull latest changes
-cd ~/Code/Temp/devbox
+cd ~/Code/devbox
 git pull
 
 # Apply to current machine
@@ -214,9 +274,9 @@ chezmoi apply --source="./chezmoi"
 
 The configuration automatically detects and adapts to:
 
-- **macOS**: Homebrew paths, macOS-specific tools
+- **macOS**: Homebrew paths, version managers, Raycast scripts
 - **Linux**: APT/DNF package managers, Linux paths
-- **DevContainer**: Container-optimized settings
+- **DevContainer**: Container-optimized settings, Gitpod management
 
 ## Troubleshooting
 
@@ -251,6 +311,13 @@ The configuration includes fallbacks for missing tools:
 - If `bat` is not available, `cat` works normally
 - If `eza` is not available, `ls` is used
 - If `ag` is not available, `rg` or `find` is used for FZF
+
+## Fonts
+
+For the best terminal experience, install a Nerd Font:
+
+- [SauceCodePro Nerd Font](https://github.com/ryanoasis/nerd-fonts/tree/master/patched-fonts/SourceCodePro)
+- [MesloLGS NF](https://github.com/romkatv/powerlevel10k#meslo-nerd-font-patched-for-powerlevel10k)
 
 ## License
 
