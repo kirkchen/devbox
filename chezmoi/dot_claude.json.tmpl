@@ -20,7 +20,7 @@
       ],
       "env": {}
     }
-    {{- if .github_token }},
+    {{- if and (hasKey . "github_token") .github_token }},
     "github": {
       {{- if .is_devcontainer }}
       "command": "npx",
