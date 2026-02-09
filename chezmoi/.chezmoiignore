@@ -55,6 +55,12 @@ CHANGELOG.md
 # GPG keys
 .gnupg
 
+# Claude Code documentation (keep in repo only, don't copy to home)
+.claude/settings.md
+
+# Raycast scripts (managed separately, user sets Raycast path manually)
+.config/raycast
+
 # Application-specific data
 .docker
 .kube
