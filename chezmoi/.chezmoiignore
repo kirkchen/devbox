@@ -55,8 +55,10 @@ CHANGELOG.md
 # GPG keys
 .gnupg
 
-# Claude Code documentation (keep in repo only, don't copy to home)
-.claude/settings.md
+# Claude Code - managed via run_onchange script, NOT via chezmoi directory
+# (.claude/ contains credentials, history, plugins, and runtime data)
+# chezmoi must NOT own ~/.claude/ directory to avoid deleting runtime files
+.claude
 
 # Raycast scripts (managed separately, user sets Raycast path manually)
 .config/raycast
