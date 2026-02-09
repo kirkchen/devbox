@@ -29,6 +29,9 @@ export FZF_ALT_C_COMMAND='find . -type d -not -path "*/\.*" 2>/dev/null | head -
 {{- if eq .chezmoi.os "darwin" }}
 # iTerm2 Shell Integration (macOS only)
 [[ -f "${HOME}/.iterm2_shell_integration.zsh" ]] && source "${HOME}/.iterm2_shell_integration.zsh"
+
+# Lazygit config path (macOS defaults to ~/Library/Application Support/)
+export LG_CONFIG_FILE="$HOME/.config/lazygit/config.yml"
 {{- end }}
 
 
