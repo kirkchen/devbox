@@ -10,11 +10,13 @@ BULLETTRAIN_PROMPT_ORDER=(
   context
   dir
   git
+  kctx
   nvm
   cmd_exec_time
 )
 BULLETTRAIN_NVM_SHOW=true
 BULLETTRAIN_GO_SHOW=true
+BULLETTRAIN_KCTX_KUBECTL=true
 BULLETTRAIN_EXEC_TIME_SHOW=true
 BULLETTRAIN_DIR_EXTENDED=2
 BULLETTRAIN_GIT_PROMPT_CMD=\${\$(git_prompt_info)//\\//\ \ }
