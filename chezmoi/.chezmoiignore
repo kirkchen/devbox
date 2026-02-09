@@ -60,6 +60,9 @@ CHANGELOG.md
 # chezmoi must NOT own ~/.claude/ directory to avoid deleting runtime files
 .claude
 
+# CLAUDE.md source for script (not a deployable file)
+claude-code
+
 # Raycast scripts (managed separately, user sets Raycast path manually)
 .config/raycast
 
