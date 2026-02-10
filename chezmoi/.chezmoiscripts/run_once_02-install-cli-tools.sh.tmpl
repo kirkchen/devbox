@@ -5,7 +5,7 @@ echo "🛠️ Installing CLI tools..."
 
 # Helper function to check if command exists
 command_exists() {
-    command -v "$1" &> /dev/null
+    command -v "$1" &> /dev/null || [[ -x "$HOME/.local/bin/$1" ]]
 }
 
 {{- if eq .chezmoi.os "darwin" }}
@@ -24,17 +24,12 @@ if command_exists brew; then
     command_exists lazygit || brew install lazygit
     command_exists delta || brew install git-delta
 
-    # npm-based tools (for consistency across platforms)
-    if command_exists npm; then
-        # Claude Code CLI
-        if ! command_exists claude; then
-            echo "Installing Claude Code CLI..."
-            npm install -g @anthropic-ai/claude-code
-        fi
-    else
-        echo "⚠️ npm not found. Skipping npm-based tools (claude-code)."
+    # Claude Code CLI (native installer)
+    if ! command_exists claude; then
+        echo "Installing Claude Code CLI..."
+        curl -fsSL https://claude.ai/install.sh | bash
     fi
-    
+
     # Set up fzf key bindings if fzf was installed via brew
     if [ -d "$(brew --prefix)/opt/fzf" ] && [ ! -f "$HOME/.fzf.zsh" ]; then
         echo "Setting up fzf key bindings..."
@@ -122,15 +117,10 @@ if command_exists apt-get; then
         rm /tmp/delta.deb
     fi
 
-    # npm-based tools (for consistency across platforms)
-    if command_exists npm; then
-        # Claude Code CLI
-        if ! command_exists claude; then
-            echo "Installing Claude Code CLI..."
-            npm install -g @anthropic-ai/claude-code
-        fi
-    else
-        echo "⚠️ npm not found. Skipping npm-based tools (claude-code)."
+    # Claude Code CLI (native installer)
+    if ! command_exists claude; then
+        echo "Installing Claude Code CLI..."
+        curl -fsSL https://claude.ai/install.sh | bash
     fi
 fi
 

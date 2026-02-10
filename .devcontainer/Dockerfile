@@ -105,6 +105,15 @@ RUN ARCH=$(dpkg --print-architecture) \
     && dpkg -i /tmp/delta.deb \
     && rm /tmp/delta.deb
 
+# Install Node.js 20.x (for npm-based tools)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (native installer)
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
 # Install uv (fast Python package and project manager)
 # Using the official Docker image to get the binary
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
