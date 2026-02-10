@@ -97,7 +97,8 @@ _zcc_session_name() {
         if [[ "$branch_name" == "HEAD" ]]; then
             branch_name="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)"
         fi
-        echo "${project_name}/${branch_name}"
+        # Zellij session names cannot contain '/'
+        echo "${project_name}:${branch_name//\//-}"
     else
         echo "$(basename "$dir")"
     fi
