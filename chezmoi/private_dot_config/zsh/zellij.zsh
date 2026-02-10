@@ -46,7 +46,7 @@ zcc() {
                 echo "Usage: zcc [-e|--exec] [-d|--dir <path>] [-h|--help]"
                 echo ""
                 echo "Launch or attach to a Zellij + Claude Code session."
-                echo "Sessions are named as 'project/branch' for easy identification."
+                echo "Sessions are named as 'project:branch' for easy identification."
                 echo ""
                 echo "Options:"
                 echo "  -e, --exec    Execution mode (--dangerously-skip-permissions)"
@@ -54,7 +54,7 @@ zcc() {
                 echo "  -h, --help    Show this help message"
                 echo ""
                 echo "Inside Zellij:"
-                echo "  Alt+e         Open exec mode Claude Code in new pane"
+                echo "  Alt+e         Switch to exec mode (quit & restart as zcc -e)"
                 echo "  Alt+o, w      Session manager (search & switch)"
                 echo "  Alt+o, d      Detach from session"
                 return 0
@@ -79,11 +79,21 @@ zcc() {
     local session_name
     session_name=$(_zcc_session_name "$target_dir")
 
+    local layout="claude"
     if [[ "$exec_mode" == true ]]; then
         session_name="${session_name}:exec"
+        layout="claude-exec"
     fi
 
-    (cd "$target_dir" && zellij --layout claude attach --create "$session_name")
+    (cd "$target_dir" && zellij --layout "$layout" attach --create "$session_name")
+
+    # Alt+e creates flag file and quits zellij; detect and restart as exec mode
+    if [[ -f "/tmp/zcc-switch-exec-${session_name}" ]]; then
+        rm -f "/tmp/zcc-switch-exec-${session_name}"
+        if [[ "$exec_mode" != true ]]; then
+            zcc -e -d "$target_dir"
+        fi
+    fi
 }
 
 # _zcc_session_name: 從 git repo + branch 組合 session 名稱

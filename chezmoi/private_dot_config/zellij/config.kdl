@@ -16,8 +16,8 @@ keybinds {
         bind "Alt t" { SwitchToMode "tab"; }
         bind "Alt o" { SwitchToMode "session"; }
         bind "Alt g" { SwitchToMode "locked"; }
-        // Alt+e: Open exec mode Claude Code (continue last conversation, skip permissions)
-        bind "Alt e" { Run "claude" "-c" "--dangerously-skip-permissions"; }
+        // Alt+e: Switch to exec mode - quit session, zcc auto-restarts as zcc -e
+        bind "Alt e" { Run "bash" "-c" "touch /tmp/zcc-switch-exec-$ZELLIJ_SESSION_NAME && zellij kill-session $ZELLIJ_SESSION_NAME"; }
     }
     tab {
         unbind "Ctrl t"
