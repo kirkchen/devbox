@@ -1,7 +1,8 @@
 gui:
   showCommandLog: false
   nerdFontsVersion: "3"
+quitOnTopLevelReturn: true
 git:
-  paging:
-    pager: delta --dark --paging=never
-    colorArg: always
+  pagers:
+    - pager: delta --dark --paging=never
+      colorArg: always
