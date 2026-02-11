@@ -1,0 +1,55 @@
+#!/bin/bash
+# Modify script: merge mcpServers into existing .claude.json
+# Preserves all runtime state (auth, projects, settings, etc.)
+
+set -e
+
+# Desired mcpServers from chezmoi
+DESIRED_MCP='{
+  "context7": {
+    "type": "http",
+    "url": "https://mcp.context7.com/mcp"
+  },
+  "sequential-thinking": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@modelcontextprotocol/server-sequential-thinking"],
+    "env": {}
+  },
+  "playwright": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@playwright/mcp@latest"],
+    "env": {}
+  }
+{{- if and (hasKey . "github_token") .github_token }},
+  "github": {
+  {{- if .is_devcontainer }}
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": { "GITHUB_TOKEN": "{{ .github_token }}" }
+  {{- else }}
+    "command": "docker",
+    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "{{ .github_token }}" }
+  {{- end }}
+  }
+{{- end }}
+}'
+
+# Read existing file from stdin
+EXISTING="$(cat)"
+
+if [ -z "$EXISTING" ] || [ "$EXISTING" = "{}" ]; then
+    # No existing file, create with just mcpServers
+    echo "{\"mcpServers\": $DESIRED_MCP}"
+else
+    # Merge mcpServers into existing, preserving everything else
+    echo "$EXISTING" | python3 -c "
+import sys, json
+existing = json.load(sys.stdin)
+desired_mcp = json.loads('''$DESIRED_MCP''')
+existing['mcpServers'] = desired_mcp
+json.dump(existing, sys.stdout, indent=2, ensure_ascii=False)
+"
+fi
