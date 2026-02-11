@@ -16,6 +16,10 @@ keybinds {
         bind "Alt t" { SwitchToMode "tab"; }
         bind "Alt o" { SwitchToMode "session"; }
         bind "Alt g" { SwitchToMode "locked"; }
+        // Ctrl+g: lazygit floating pane (fullscreen overlay, q to close)
+        bind "Ctrl g" { Run "lazygit" { floating true; }; }
+        // Ctrl+t: shell split pane on the right (exit to close)
+        bind "Ctrl t" { NewPane "Right"; }
         // Alt+e: Switch to exec mode - quit session, zcc auto-restarts as zcc -e
         bind "Alt e" { Run "bash" "-c" "touch /tmp/zcc-switch-exec-$ZELLIJ_SESSION_NAME && zellij kill-session $ZELLIJ_SESSION_NAME"; }
     }

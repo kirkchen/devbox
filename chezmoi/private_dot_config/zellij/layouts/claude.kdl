@@ -8,7 +8,7 @@ layout {
             plugin location="zellij:status-bar"
         }
     }
-    tab name="claude" {
-        pane command="claude" focus=true close_on_exit=true
+    tab name="claude" focus=true {
+        pane command="claude" close_on_exit=true
     }
 }

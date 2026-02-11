@@ -54,6 +54,8 @@ zcc() {
                 echo "  -h, --help    Show this help message"
                 echo ""
                 echo "Inside Zellij:"
+                echo "  Ctrl+g        Open lazygit (floating, q to close)"
+                echo "  Ctrl+t        Open shell (split right, exit to close)"
                 echo "  Alt+e         Switch to exec mode (quit & restart as zcc -e)"
                 echo "  Alt+o, w      Session manager (search & switch)"
                 echo "  Alt+o, d      Detach from session"
@@ -95,6 +97,23 @@ zcc() {
         fi
     fi
 }
+
+# === Zellij Auto Tab Naming ===
+# 切換目錄或 git branch 時自動更新 tab 名稱為 "目錄:branch"
+
+_zellij_update_tab_name() {
+    [[ -z "$ZELLIJ" ]] && return
+    local dir="$(basename "$PWD")"
+    local branch="$(git symbolic-ref --short HEAD 2>/dev/null)"
+    if [[ -n "$branch" ]]; then
+        zellij action rename-tab "$dir:$branch"
+    else
+        zellij action rename-tab "$dir"
+    fi
+}
+
+chpwd_functions+=(_zellij_update_tab_name)
+_zellij_update_tab_name
 
 # _zcc_session_name: 從 git repo + branch 組合 session 名稱
 _zcc_session_name() {
