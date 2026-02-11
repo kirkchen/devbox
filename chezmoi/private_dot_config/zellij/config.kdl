@@ -10,14 +10,23 @@ keybinds {
     // Remap Ctrl+o (session mode) -> Alt+o
     // Remap Ctrl+g (lock mode) -> Alt+g
     normal {
-        unbind "Ctrl t"
         unbind "Ctrl o"
-        unbind "Ctrl g"
+        // Remap default mode switches to Alt
         bind "Alt t" { SwitchToMode "tab"; }
         bind "Alt o" { SwitchToMode "session"; }
         bind "Alt g" { SwitchToMode "locked"; }
+        // Override Ctrl+g/t defaults with custom actions (bind overrides, no unbind needed)
         // Ctrl+g: lazygit floating pane (fullscreen overlay, q to close)
-        bind "Ctrl g" { Run "lazygit" { floating true; }; }
+        bind "Ctrl g" {
+            Run "lazygit" {
+                floating true
+                close_on_exit true
+                x "1%"
+                y "1%"
+                width "98%"
+                height "96%"
+            }
+        }
         // Ctrl+t: shell split pane on the right (exit to close)
         bind "Ctrl t" { NewPane "Right"; }
         // Alt+e: Switch to exec mode - quit session, zcc auto-restarts as zcc -e
