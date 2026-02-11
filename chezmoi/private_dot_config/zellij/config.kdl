@@ -27,6 +27,13 @@ keybinds {
                 height "96%"
             }
         }
+        // Ctrl+f: sessionizer - fzf session/tab switcher
+        bind "Ctrl f" {
+            Run "bash" "-c" "$HOME/.config/zellij/sessionizer.sh" {
+                floating true
+                close_on_exit true
+            }
+        }
         // Ctrl+t: shell split pane on the right (exit to close)
         bind "Ctrl t" { NewPane "Right"; }
         // Alt+e: Switch to exec mode - quit session, zcc auto-restarts as zcc -e

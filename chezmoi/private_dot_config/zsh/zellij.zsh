@@ -54,6 +54,7 @@ zcc() {
                 echo "  -h, --help    Show this help message"
                 echo ""
                 echo "Inside Zellij:"
+                echo "  Ctrl+f        Sessionizer (fzf session/tab switcher)"
                 echo "  Ctrl+g        Open lazygit (floating, q to close)"
                 echo "  Ctrl+t        Open shell (split right, exit to close)"
                 echo "  Alt+e         Switch to exec mode (quit & restart as zcc -e)"
@@ -88,6 +89,17 @@ zcc() {
     fi
 
     (cd "$target_dir" && zellij --layout "$layout" attach --create "$session_name")
+
+    # Ctrl+f sessionizer: detach + flag file → attach to target session
+    if [[ -f "/tmp/zcc-switch-session-${session_name}" ]]; then
+        local target
+        target="$(cat "/tmp/zcc-switch-session-${session_name}")"
+        rm -f "/tmp/zcc-switch-session-${session_name}"
+        if [[ -n "$target" ]]; then
+            zellij attach "$target"
+        fi
+        return
+    fi
 
     # Alt+e creates flag file and quits zellij; detect and restart as exec mode
     if [[ -f "/tmp/zcc-switch-exec-${session_name}" ]]; then
