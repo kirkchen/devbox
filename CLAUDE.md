@@ -180,9 +180,8 @@ alias gcoi="..."           # 互動式切換分支
 ### Installation Scripts
 
 1. `run_once_01-install-oh-my-zsh.sh` - Oh-My-Zsh and plugins
-2. `run_once_02-install-cli-tools.sh` - CLI tools via Homebrew/apt
-3. `run_once_03-install-tmux-plugins.sh` - Tmux plugin manager
-4. `run_once_04-install-claude-plugins.sh` - Claude Code plugins
+2. `run_once_02-install-cli-tools.sh` - CLI tools via Homebrew/apt (includes zellij, lazygit, delta)
+3. `run_once_04-install-claude-plugins.sh` - Claude Code plugins
 
 ## Development Workflow
 
@@ -204,7 +203,7 @@ When adding new configurations:
 
 ### Shell & Terminal
 - **Zsh** with Oh-My-Zsh (bullet-train theme)
-- **Tmux** with resurrect and continuum plugins
+- **Zellij**: Terminal multiplexer (keybindings remapped to Alt+t/o/g to avoid Claude Code conflicts)
 - **Vim** with NERDTree, fzf.vim, CoC
 
 ### CLI Tools
@@ -212,8 +211,8 @@ When adding new configurations:
 - **eza**: Modern ls replacement
 - **bat**: Syntax-highlighted cat
 - **ag**: The Silver Searcher
-- **tig**: Git text-mode interface
-- **diff-so-fancy**: Better git diffs
+- **lazygit**: Git TUI (uses delta as pager)
+- **delta**: Modern git diff viewer (side-by-side, line numbers)
 - **direnv**: Environment variable management
 - **Claude Code CLI**: Installed automatically with global settings
 

@@ -9,13 +9,13 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     curl \
     wget \
     git \
-    tmux \
     # Build tools (for some installations)
     build-essential \
     # Search tools from your config
     silversearcher-ag \
-    # Git UI tool
+    # Git TUI & terminal multiplexer (kept for parallel testing)
     tig \
+    tmux \
     # Process monitoring
     htop \
     # Additional useful tools
@@ -83,9 +83,39 @@ RUN apt-get update && apt-get install -y gpg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install diff-so-fancy (better git diff)
-# Note: Installing via npm for better reliability
-# This will be installed globally after node/npm are available
+# Install zellij (terminal multiplexer)
+RUN ARCH=$(dpkg --print-architecture) \
+    && ZELLIJ_VERSION="0.41.2" \
+    && if [ "$ARCH" = "amd64" ]; then ZELLIJ_ARCH="x86_64"; elif [ "$ARCH" = "arm64" ]; then ZELLIJ_ARCH="aarch64"; fi \
+    && curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-${ZELLIJ_ARCH}-unknown-linux-musl.tar.gz" -o /tmp/zellij.tar.gz \
+    && tar xzf /tmp/zellij.tar.gz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/zellij \
+    && rm /tmp/zellij.tar.gz
+
+# Install lazygit (git TUI)
+RUN ARCH=$(dpkg --print-architecture) \
+    && LAZYGIT_VERSION="0.44.1" \
+    && if [ "$ARCH" = "amd64" ]; then LG_ARCH="x86_64"; elif [ "$ARCH" = "arm64" ]; then LG_ARCH="arm64"; fi \
+    && curl -L "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_${LG_ARCH}.tar.gz" -o /tmp/lazygit.tar.gz \
+    && tar xzf /tmp/lazygit.tar.gz -C /usr/local/bin lazygit \
+    && chmod +x /usr/local/bin/lazygit \
+    && rm /tmp/lazygit.tar.gz
+
+# Install delta (modern diff viewer)
+RUN ARCH=$(dpkg --print-architecture) \
+    && DELTA_VERSION="0.18.2" \
+    && curl -L "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/git-delta_${DELTA_VERSION}_${ARCH}.deb" -o /tmp/delta.deb \
+    && dpkg -i /tmp/delta.deb \
+    && rm /tmp/delta.deb
+
+# Install Node.js 20.x (for npm-based tools)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (native installer)
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Install uv (fast Python package and project manager)
 # Using the official Docker image to get the binary

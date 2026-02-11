@@ -5,7 +5,7 @@ echo "🛠️ Installing CLI tools..."
 
 # Helper function to check if command exists
 command_exists() {
-    command -v "$1" &> /dev/null
+    command -v "$1" &> /dev/null || [[ -x "$HOME/.local/bin/$1" ]]
 }
 
 {{- if eq .chezmoi.os "darwin" }}
@@ -21,24 +21,16 @@ if command_exists brew; then
     command_exists tig || brew install tig
     command_exists htop || brew install htop
     command_exists direnv || brew install direnv
-    
-    # npm-based tools (for consistency across platforms)
-    if command_exists npm; then
-        # diff-so-fancy
-        if ! command_exists diff-so-fancy; then
-            echo "Installing diff-so-fancy..."
-            npm install -g diff-so-fancy
-        fi
-        
-        # Claude Code CLI
-        if ! command_exists claude; then
-            echo "Installing Claude Code CLI..."
-            npm install -g @anthropic-ai/claude-code
-        fi
-    else
-        echo "⚠️ npm not found. Skipping npm-based tools (diff-so-fancy, claude-code)."
+    command_exists zellij || brew install zellij
+    command_exists lazygit || brew install lazygit
+    command_exists delta || brew install git-delta
+
+    # Claude Code CLI (native installer)
+    if ! command_exists claude; then
+        echo "Installing Claude Code CLI..."
+        curl -fsSL https://claude.ai/install.sh | bash
     fi
-    
+
     # Set up fzf key bindings if fzf was installed via brew
     if [ -d "$(brew --prefix)/opt/fzf" ] && [ ! -f "$HOME/.fzf.zsh" ]; then
         echo "Setting up fzf key bindings..."
@@ -92,22 +84,45 @@ if command_exists apt-get; then
     command_exists tig || sudo apt-get install -y tig
     command_exists htop || sudo apt-get install -y htop
     command_exists direnv || sudo apt-get install -y direnv
-    
-    # npm-based tools (for consistency across platforms)
-    if command_exists npm; then
-        # diff-so-fancy
-        if ! command_exists diff-so-fancy; then
-            echo "Installing diff-so-fancy..."
-            npm install -g diff-so-fancy
-        fi
-        
-        # Claude Code CLI
-        if ! command_exists claude; then
-            echo "Installing Claude Code CLI..."
-            npm install -g @anthropic-ai/claude-code
-        fi
-    else
-        echo "⚠️ npm not found. Skipping npm-based tools (diff-so-fancy, claude-code)."
+
+    # zellij (terminal multiplexer)
+    if ! command_exists zellij; then
+        echo "Installing zellij..."
+        ARCH=$(dpkg --print-architecture)
+        ZELLIJ_VERSION="0.41.2"
+        if [ "$ARCH" = "amd64" ]; then ZELLIJ_ARCH="x86_64"; elif [ "$ARCH" = "arm64" ]; then ZELLIJ_ARCH="aarch64"; fi
+        curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-${ZELLIJ_ARCH}-unknown-linux-musl.tar.gz" -o /tmp/zellij.tar.gz
+        sudo tar xzf /tmp/zellij.tar.gz -C /usr/local/bin
+        sudo chmod +x /usr/local/bin/zellij
+        rm /tmp/zellij.tar.gz
+    fi
+
+    # lazygit (git TUI)
+    if ! command_exists lazygit; then
+        echo "Installing lazygit..."
+        ARCH=$(dpkg --print-architecture)
+        LAZYGIT_VERSION="0.44.1"
+        if [ "$ARCH" = "amd64" ]; then LG_ARCH="x86_64"; elif [ "$ARCH" = "arm64" ]; then LG_ARCH="arm64"; fi
+        curl -L "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_${LG_ARCH}.tar.gz" -o /tmp/lazygit.tar.gz
+        sudo tar xzf /tmp/lazygit.tar.gz -C /usr/local/bin lazygit
+        sudo chmod +x /usr/local/bin/lazygit
+        rm /tmp/lazygit.tar.gz
+    fi
+
+    # delta (modern diff viewer)
+    if ! command_exists delta; then
+        echo "Installing delta..."
+        ARCH=$(dpkg --print-architecture)
+        DELTA_VERSION="0.18.2"
+        curl -L "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/git-delta_${DELTA_VERSION}_${ARCH}.deb" -o /tmp/delta.deb
+        sudo dpkg -i /tmp/delta.deb
+        rm /tmp/delta.deb
+    fi
+
+    # Claude Code CLI (native installer)
+    if ! command_exists claude; then
+        echo "Installing Claude Code CLI..."
+        curl -fsSL https://claude.ai/install.sh | bash
     fi
 fi
 
@@ -118,7 +133,7 @@ echo "✅ CLI tools installation complete!"
 # Summary of installed tools
 echo ""
 echo "📋 Tool status:"
-for tool in fzf eza bat ag tig diff-so-fancy claude htop direnv; do
+for tool in fzf eza bat ag tig zellij lazygit delta claude htop direnv; do
     if command_exists "$tool" || ([ "$tool" = "bat" ] && command_exists batcat); then
         echo "  ✅ $tool"
     else

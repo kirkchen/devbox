@@ -8,7 +8,7 @@ A minimal, robust development container setup with intelligent cross-platform do
 - 📦 **Prebuilt Image**: Published to GitHub Container Registry for fast startup in other projects
 - 🔧 **Chezmoi**: Smart dotfiles management with automatic environment detection
 - 🚀 **Oh-My-Zsh**: Bullet-train theme with essential plugins
-- 🛠️ **Modern CLI Tools**: fzf, eza, bat, ag, tig, and more
+- 🛠️ **Modern CLI Tools**: fzf, eza, bat, ag, lazygit, delta, and more
 - 🖥️ **Multi-Environment Support**: Automatic detection for macOS, Linux, and DevContainers
 - ⚙️ **Minimal Configuration**: Only asks for name and email
 - 🛡️ **Defensive Programming**: Robust error handling and fallback mechanisms
@@ -86,19 +86,20 @@ devbox/
 │   ├── .chezmoiscripts/     # One-time setup scripts
 │   │   ├── run_once_01-install-oh-my-zsh.sh
 │   │   ├── run_once_02-install-cli-tools.sh.tmpl
-│   │   ├── run_once_03-install-tmux-plugins.sh
 │   │   └── run_once_04-install-claude-plugins.sh
 │   ├── dot_gitconfig.tmpl   # Git configuration
 │   ├── dot_zshrc.tmpl       # Zsh configuration
 │   ├── dot_claude.json.tmpl # Claude Code MCP servers
-│   ├── dot_tmux.conf        # Tmux configuration
 │   ├── dot_vimrc            # Vim configuration
-│   ├── dot_tigrc            # Tig configuration
 │   ├── private_dot_claude/  # Claude Code settings
 │   │   ├── settings.json.tmpl
 │   │   ├── settings.md      # Settings documentation
 │   │   └── CLAUDE.md.tmpl   # Development guidelines
 │   └── private_dot_config/
+│       ├── zellij/
+│       │   └── config.kdl   # Zellij config (Alt+t/o/g remapped)
+│       ├── lazygit/
+│       │   └── config.yml   # Lazygit config (delta pager)
 │       ├── zsh/             # Modular Zsh configs
 │       │   ├── oh-my-zsh.zsh
 │       │   ├── core.zsh.tmpl
@@ -117,7 +118,7 @@ devbox/
 ### Shell & Terminal
 
 - **Zsh**: Modern shell with Oh-My-Zsh framework
-- **Tmux**: Terminal multiplexer with resurrect and continuum plugins
+- **Zellij**: Terminal multiplexer (keybindings remapped to Alt+t/o/g to avoid Claude Code conflicts)
 - **Theme**: Bullet-train theme with proper font support
 
 ### CLI Tools
@@ -126,8 +127,8 @@ devbox/
 - **eza**: Modern replacement for ls (successor to exa)
 - **bat**: Cat with syntax highlighting (multi-architecture support)
 - **ag**: The Silver Searcher for fast code search
-- **tig**: Text-mode interface for Git
-- **diff-so-fancy**: Better git diffs
+- **lazygit**: Git TUI (uses delta as pager)
+- **delta**: Modern git diff viewer (side-by-side, line numbers)
 - **htop**: Interactive process viewer
 - **direnv**: Environment variable management
 
@@ -184,10 +185,10 @@ The system automatically detects your environment (macOS, Linux, or DevContainer
 
 | Alias | Description |
 |-------|-------------|
-| `t` | tig |
-| `ts` | tig status |
-| `ta` | tig --all |
-| `mux` | tmuxinator |
+| `lg` | lazygit |
+| `zj` | zellij |
+| `zja` | zellij attach |
+| `zjl` | zellij list-sessions |
 | `cat` | bat (if installed) |
 | `ls/ll/lt` | eza with icons (if installed) |
 

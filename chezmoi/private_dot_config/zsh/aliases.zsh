@@ -31,6 +31,16 @@ alias ts="tig status"
 alias ta="tig --all"
 alias e="\$EDITOR"
 
+# === Terminal Multiplexer & Git TUI ===
+if command -v lazygit &>/dev/null; then
+    alias lg='lazygit'
+fi
+if command -v zellij &>/dev/null; then
+    alias zj='zellij'
+    alias zja='zellij attach'
+    alias zjl='zellij list-sessions'
+fi
+
 # === Modern CLI (loads if installed) ===
 if command -v bat &>/dev/null; then
     alias cat='bat --style=plain'
