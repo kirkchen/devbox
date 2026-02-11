@@ -34,6 +34,13 @@ keybinds {
                 close_on_exit true
             }
         }
+        // Alt+p: plan viewer - 右側垂直分割瀏覽 docs/plans/*.md
+        bind "Alt p" {
+            Run "bash" "-c" "$HOME/.config/zellij/plan-viewer.sh" {
+                direction "Right"
+                close_on_exit true
+            }
+        }
         // Ctrl+t: shell split pane on the right (exit to close)
         bind "Ctrl t" { NewPane "Right"; }
         // Alt+e: Switch to exec mode - quit session, zcc auto-restarts as zcc -e
