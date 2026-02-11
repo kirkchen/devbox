@@ -25,6 +25,10 @@ alias gmdb="f() { \
 }; f"
 
 # === Tools ===
+alias mux="tmuxinator"
+alias t="tig"
+alias ts="tig status"
+alias ta="tig --all"
 alias e="\$EDITOR"
 
 # === Terminal Multiplexer & Git TUI ===

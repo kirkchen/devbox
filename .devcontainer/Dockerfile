@@ -13,6 +13,9 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     build-essential \
     # Search tools from your config
     silversearcher-ag \
+    # Git TUI & terminal multiplexer (kept for parallel testing)
+    tig \
+    tmux \
     # Process monitoring
     htop \
     # Additional useful tools

@@ -18,6 +18,7 @@ if command_exists brew; then
     command_exists eza || brew install eza
     command_exists bat || brew install bat
     command_exists ag || brew install the_silver_searcher
+    command_exists tig || brew install tig
     command_exists htop || brew install htop
     command_exists direnv || brew install direnv
     command_exists zellij || brew install zellij
@@ -80,6 +81,7 @@ if command_exists apt-get; then
     # Basic tools via apt (only install if not present)
     sudo apt-get update
     command_exists ag || sudo apt-get install -y silversearcher-ag
+    command_exists tig || sudo apt-get install -y tig
     command_exists htop || sudo apt-get install -y htop
     command_exists direnv || sudo apt-get install -y direnv
 
@@ -131,7 +133,7 @@ echo "✅ CLI tools installation complete!"
 # Summary of installed tools
 echo ""
 echo "📋 Tool status:"
-for tool in fzf eza bat ag zellij lazygit delta claude htop direnv; do
+for tool in fzf eza bat ag tig zellij lazygit delta claude htop direnv; do
     if command_exists "$tool" || ([ "$tool" = "bat" ] && command_exists batcat); then
         echo "  ✅ $tool"
     else
