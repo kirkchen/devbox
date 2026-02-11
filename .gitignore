@@ -1,6 +1,9 @@
 # Claude configuration
 .claude/
 
+# Git worktrees
+.worktrees/
+
 # DevContainer specific
 .devcontainer/.env
 .devcontainer/secrets/
