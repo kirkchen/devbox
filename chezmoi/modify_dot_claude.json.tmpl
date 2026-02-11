@@ -13,13 +13,13 @@ DESIRED_MCP='{
   "sequential-thinking": {
     "type": "stdio",
     "command": "npx",
-    "args": ["@modelcontextprotocol/server-sequential-thinking"],
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
     "env": {}
   },
   "playwright": {
     "type": "stdio",
     "command": "npx",
-    "args": ["@playwright/mcp@latest"],
+    "args": ["-y", "@playwright/mcp@latest"],
     "env": {}
   }
 {{- if and (hasKey . "github_token") .github_token }},
