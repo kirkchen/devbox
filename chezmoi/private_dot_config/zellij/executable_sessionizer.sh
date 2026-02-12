@@ -205,7 +205,15 @@ case "$type" in
         zellij action go-to-tab-name "$target"
         ;;
     session)
-        echo "$target" > "/tmp/zcc-switch-session-${CURRENT_SESSION}"
-        zellij action detach
+        # 使用 zellij-switch plugin 透過 Plugin API 切換 session
+        # zellij action detach 在 floating pane 中無效，但 Plugin API 的
+        # switch_session() 是 server-side 操作，不受 pane 限制
+        plugin_url="https://github.com/mostafaqanbaryan/zellij-switch/releases/download/0.2.1/zellij-switch.wasm"
+        plugin_local="$HOME/.config/zellij/plugins/zellij-switch.wasm"
+        if [[ -f "$plugin_local" ]]; then
+            zellij pipe --plugin "file:$plugin_local" -- "--session $target"
+        else
+            zellij pipe --plugin "$plugin_url" -- "--session $target"
+        fi
         ;;
 esac

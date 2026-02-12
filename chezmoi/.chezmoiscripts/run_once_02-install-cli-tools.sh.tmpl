@@ -128,6 +128,16 @@ fi
 
 {{- end }}
 
+# Zellij plugins
+if command_exists zellij; then
+    mkdir -p "$HOME/.config/zellij/plugins"
+    if [[ ! -f "$HOME/.config/zellij/plugins/zellij-switch.wasm" ]]; then
+        echo "Installing zellij-switch plugin..."
+        curl -L -o "$HOME/.config/zellij/plugins/zellij-switch.wasm" \
+            "https://github.com/mostafaqanbaryan/zellij-switch/releases/download/0.2.1/zellij-switch.wasm" 2>/dev/null || true
+    fi
+fi
+
 echo "✅ CLI tools installation complete!"
 
 # Summary of installed tools
