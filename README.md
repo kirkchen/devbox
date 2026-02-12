@@ -97,7 +97,9 @@ devbox/
 │   │   └── CLAUDE.md.tmpl   # Development guidelines
 │   └── private_dot_config/
 │       ├── zellij/
-│       │   └── config.kdl   # Zellij config (Alt+t/o/g remapped)
+│       │   ├── config.kdl           # Zellij config (Alt+t/o/g remapped)
+│       │   ├── sessionizer.sh       # Ctrl+f session/tab switcher with Claude summary
+│       │   └── layouts/             # Session layouts (claude, claude-exec)
 │       ├── lazygit/
 │       │   └── config.yml   # Lazygit config (delta pager)
 │       ├── zsh/             # Modular Zsh configs
@@ -107,6 +109,7 @@ devbox/
 │       │   ├── functions.zsh  # Cross-platform: now(), fixup()
 │       │   ├── functions-macos.zsh # macOS: code()
 │       │   ├── aliases.zsh    # Git, K8s, tools aliases
+│       │   ├── zellij.zsh     # Zellij + Claude Code session management (zcc)
 │       │   └── gitpod.zsh     # Gitpod environment management
 │       └── raycast/
 │           └── scripts/       # macOS Raycast scripts
@@ -118,7 +121,7 @@ devbox/
 ### Shell & Terminal
 
 - **Zsh**: Modern shell with Oh-My-Zsh framework
-- **Zellij**: Terminal multiplexer (keybindings remapped to Alt+t/o/g to avoid Claude Code conflicts)
+- **Zellij**: Terminal multiplexer with session management (`zcc` for Claude Code sessions, Ctrl+f sessionizer with task summaries)
 - **Theme**: Bullet-train theme with proper font support
 
 ### CLI Tools
@@ -189,6 +192,8 @@ The system automatically detects your environment (macOS, Linux, or DevContainer
 | `zj` | zellij |
 | `zja` | zellij attach |
 | `zjl` | zellij list-sessions |
+| `zcc` | Launch Claude Code in named Zellij session |
+| `zcc -e` | Launch in exec mode (--dangerously-skip-permissions) |
 | `cat` | bat (if installed) |
 | `ls/ll/lt` | eza with icons (if installed) |
 

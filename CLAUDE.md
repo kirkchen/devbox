@@ -91,6 +91,7 @@ chezmoi/dot_zshrc.tmpl           # Main shell entry point
 ├── ~/.config/zsh/functions.zsh  # Cross-platform: now(), fixup()
 ├── ~/.config/zsh/functions-macos.zsh  # macOS: code()
 ├── ~/.config/zsh/aliases.zsh    # Git, K8s, tools aliases
+├── ~/.config/zsh/zellij.zsh     # Zellij + Claude Code session management (zcc)
 └── ~/.config/zsh/gitpod.zsh     # Linux: Gitpod environment management
 ~/.zshrc.local                   # Local overrides (not managed)
 ```
@@ -204,6 +205,10 @@ When adding new configurations:
 ### Shell & Terminal
 - **Zsh** with Oh-My-Zsh (bullet-train theme)
 - **Zellij**: Terminal multiplexer (keybindings remapped to Alt+t/o/g to avoid Claude Code conflicts)
+  - `zcc`: Claude Code session manager (auto-names sessions as `repo:branch`)
+  - `Ctrl+f`: Sessionizer with Claude Code task summaries
+  - `Ctrl+g`: Lazygit floating pane, `Ctrl+t`: Shell split right
+  - `Alt+e`: Switch to exec mode (--dangerously-skip-permissions)
 - **Vim** with NERDTree, fzf.vim, CoC
 
 ### CLI Tools
