@@ -91,7 +91,6 @@ chezmoi/dot_zshrc.tmpl           # Main shell entry point
 ├── ~/.config/zsh/functions.zsh  # Cross-platform: now(), fixup()
 ├── ~/.config/zsh/functions-macos.zsh  # macOS: code()
 ├── ~/.config/zsh/aliases.zsh    # Git, K8s, tools aliases
-├── ~/.config/zsh/zellij.zsh     # Zellij + Claude Code session management (zcc)
 └── ~/.config/zsh/gitpod.zsh     # Linux: Gitpod environment management
 ~/.zshrc.local                   # Local overrides (not managed)
 ```
@@ -174,14 +173,13 @@ alias gcoi="..."           # 互動式切換分支
 ### MCP Servers (`~/.claude.json`)
 
 - **sequential-thinking**: For complex reasoning
-- **playwright**: Browser automation
 - **context7**: Context management
 - **github**: GitHub integration (requires `github_token`)
 
 ### Installation Scripts
 
 1. `run_once_01-install-oh-my-zsh.sh` - Oh-My-Zsh and plugins
-2. `run_once_02-install-cli-tools.sh` - CLI tools via Homebrew/apt (includes zellij, lazygit, delta)
+2. `run_once_02-install-cli-tools.sh` - CLI tools via Homebrew/apt (includes lazygit, delta)
 3. `run_once_04-install-claude-plugins.sh` - Claude Code plugins
 
 ## Development Workflow
@@ -204,11 +202,6 @@ When adding new configurations:
 
 ### Shell & Terminal
 - **Zsh** with Oh-My-Zsh (bullet-train theme)
-- **Zellij**: Terminal multiplexer (keybindings remapped to Alt+t/o/g to avoid Claude Code conflicts)
-  - `zcc`: Claude Code session manager (auto-names sessions as `repo:branch`)
-  - `Ctrl+f`: Sessionizer with Claude Code task summaries
-  - `Ctrl+g`: Lazygit floating pane, `Ctrl+t`: Shell split right
-  - `Alt+e`: Switch to exec mode (--dangerously-skip-permissions)
 - **Vim** with NERDTree, fzf.vim, CoC
 
 ### CLI Tools

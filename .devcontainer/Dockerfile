@@ -83,15 +83,6 @@ RUN apt-get update && apt-get install -y gpg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install zellij (terminal multiplexer)
-RUN ARCH=$(dpkg --print-architecture) \
-    && ZELLIJ_VERSION="0.41.2" \
-    && if [ "$ARCH" = "amd64" ]; then ZELLIJ_ARCH="x86_64"; elif [ "$ARCH" = "arm64" ]; then ZELLIJ_ARCH="aarch64"; fi \
-    && curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-${ZELLIJ_ARCH}-unknown-linux-musl.tar.gz" -o /tmp/zellij.tar.gz \
-    && tar xzf /tmp/zellij.tar.gz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/zellij \
-    && rm /tmp/zellij.tar.gz
-
 # Install lazygit (git TUI)
 RUN ARCH=$(dpkg --print-architecture) \
     && LAZYGIT_VERSION="0.44.1" \

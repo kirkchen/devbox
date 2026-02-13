@@ -21,7 +21,6 @@ if command_exists brew; then
     command_exists tig || brew install tig
     command_exists htop || brew install htop
     command_exists direnv || brew install direnv
-    command_exists zellij || brew install zellij
     command_exists lazygit || brew install lazygit
     command_exists yazi || brew install yazi
     command_exists delta || brew install git-delta
@@ -88,18 +87,6 @@ if command_exists apt-get; then
     command_exists htop || sudo apt-get install -y htop
     command_exists direnv || sudo apt-get install -y direnv
 
-    # zellij (terminal multiplexer)
-    if ! command_exists zellij; then
-        echo "Installing zellij..."
-        ARCH=$(dpkg --print-architecture)
-        ZELLIJ_VERSION="0.41.2"
-        if [ "$ARCH" = "amd64" ]; then ZELLIJ_ARCH="x86_64"; elif [ "$ARCH" = "arm64" ]; then ZELLIJ_ARCH="aarch64"; fi
-        curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-${ZELLIJ_ARCH}-unknown-linux-musl.tar.gz" -o /tmp/zellij.tar.gz
-        sudo tar xzf /tmp/zellij.tar.gz -C /usr/local/bin
-        sudo chmod +x /usr/local/bin/zellij
-        rm /tmp/zellij.tar.gz
-    fi
-
     # lazygit (git TUI)
     if ! command_exists lazygit; then
         echo "Installing lazygit..."
@@ -131,22 +118,12 @@ fi
 
 {{- end }}
 
-# Zellij plugins
-if command_exists zellij; then
-    mkdir -p "$HOME/.config/zellij/plugins"
-    if [[ ! -f "$HOME/.config/zellij/plugins/zellij-switch.wasm" ]]; then
-        echo "Installing zellij-switch plugin..."
-        curl -L -o "$HOME/.config/zellij/plugins/zellij-switch.wasm" \
-            "https://github.com/mostafaqanbaryan/zellij-switch/releases/download/0.2.1/zellij-switch.wasm" 2>/dev/null || true
-    fi
-fi
-
 echo "✅ CLI tools installation complete!"
 
 # Summary of installed tools
 echo ""
 echo "📋 Tool status:"
-for tool in fzf eza bat ag tig zellij lazygit yazi delta claude htop direnv; do
+for tool in fzf eza bat ag tig lazygit yazi delta claude htop direnv; do
     if command_exists "$tool" || ([ "$tool" = "bat" ] && command_exists batcat); then
         echo "  ✅ $tool"
     else

@@ -96,10 +96,6 @@ devbox/
 │   │   ├── settings.md      # Settings documentation
 │   │   └── CLAUDE.md.tmpl   # Development guidelines
 │   └── private_dot_config/
-│       ├── zellij/
-│       │   ├── config.kdl           # Zellij config (Alt+t/o/g remapped)
-│       │   ├── sessionizer.sh       # Ctrl+f session/tab switcher with Claude summary
-│       │   └── layouts/             # Session layouts (claude, claude-exec)
 │       ├── lazygit/
 │       │   └── config.yml   # Lazygit config (delta pager)
 │       ├── zsh/             # Modular Zsh configs
@@ -109,7 +105,6 @@ devbox/
 │       │   ├── functions.zsh  # Cross-platform: now(), fixup()
 │       │   ├── functions-macos.zsh # macOS: code()
 │       │   ├── aliases.zsh    # Git, K8s, tools aliases
-│       │   ├── zellij.zsh     # Zellij + Claude Code session management (zcc)
 │       │   └── gitpod.zsh     # Gitpod environment management
 │       └── raycast/
 │           └── scripts/       # macOS Raycast scripts
@@ -121,7 +116,6 @@ devbox/
 ### Shell & Terminal
 
 - **Zsh**: Modern shell with Oh-My-Zsh framework
-- **Zellij**: Terminal multiplexer with session management (`zcc` for Claude Code sessions, Ctrl+f sessionizer with task summaries)
 - **Theme**: Bullet-train theme with proper font support
 
 ### CLI Tools
@@ -189,11 +183,6 @@ The system automatically detects your environment (macOS, Linux, or DevContainer
 | Alias | Description |
 |-------|-------------|
 | `lg` | lazygit |
-| `zj` | zellij |
-| `zja` | zellij attach |
-| `zjl` | zellij list-sessions |
-| `zcc` | Launch Claude Code in named Zellij session |
-| `zcc -e` | Launch in exec mode (--dangerously-skip-permissions) |
 | `cat` | bat (if installed) |
 | `ls/ll/lt` | eza with icons (if installed) |
 
@@ -226,7 +215,7 @@ Pre-configured with:
 - **Plugins**: code-review, superpowers
 - **Language**: Traditional Chinese (zh-TW)
 - **Security**: Blocks reading `.env*` and `secrets/` files
-- **MCP Servers**: sequential-thinking, playwright, context7, github (if token provided)
+- **MCP Servers**: sequential-thinking, context7, github (if token provided)
 
 ## Prebuilt Image
 
