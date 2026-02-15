@@ -56,6 +56,9 @@ sync-plans() {
             ;;
     esac
 
+    # 重建 Kanban 看板
+    _rebuild_kanban
+
     # Commit & push if vault has changes
     if ! git -C "$OBSIDIAN_VAULT" diff --quiet Plans/ 2>/dev/null || \
        [[ -n "$(git -C "$OBSIDIAN_VAULT" ls-files --others --exclude-standard Plans/)" ]]; then
@@ -127,4 +130,52 @@ ENDOFPLAN
     done
 
     echo "Synced: $project_name ($synced files → $target_dir)"
+}
+
+# _rebuild_kanban: 從 plan frontmatter 重建 Kanban 看板
+_rebuild_kanban() {
+    local kanban_file="$OBSIDIAN_PLANS_DIR/_Kanban.md"
+    local not_started="" in_progress="" done=""
+
+    for plan_file in "$OBSIDIAN_PLANS_DIR"/**/*.md(N); do
+        local fname="$(basename "$plan_file")"
+        # 跳過 _Kanban.md 和 _Dashboard.md
+        [[ "$fname" == _* ]] && continue
+
+        # 讀取 frontmatter 中的 status 和 project
+        local file_status="$(awk '/^---$/{c++; next} c==1 && /^status:/{print $2; exit}' "$plan_file")"
+        local file_project="$(awk '/^---$/{c++; next} c==1 && /^project:/{print $2; exit}' "$plan_file")"
+        [[ -z "$file_status" ]] && file_status="not_started"
+
+        # 取得相對路徑和標題
+        local rel_path="${plan_file#$OBSIDIAN_PLANS_DIR/}"
+        local title="${fname%.md}"
+
+        local card="- [[${rel_path%.md}|${file_project}: ${title}]]"
+
+        case "$file_status" in
+            not_started) not_started="${not_started}${card}\n" ;;
+            in_progress) in_progress="${in_progress}${card}\n" ;;
+            done)        done="${done}${card}\n" ;;
+        esac
+    done
+
+    cat > "$kanban_file" <<ENDOFKANBAN
+---
+kanban-plugin: basic
+---
+
+## Not Started
+
+$(echo -e "${not_started:-}")
+## In Progress
+
+$(echo -e "${in_progress:-}")
+## Done
+
+$(echo -e "${done:-}")
+%% kanban:settings
+{"kanban-plugin":"basic","lane-width":280,"show-checkboxes":false}
+%%
+ENDOFKANBAN
 }
