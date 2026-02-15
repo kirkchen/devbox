@@ -187,7 +187,7 @@ _sync_kanban_status() {
 # _rebuild_kanban: 從 plan frontmatter 重建 Kanban 看板
 _rebuild_kanban() {
     local kanban_file="$OBSIDIAN_PLANS_DIR/_Kanban.md"
-    local backlog="" not_started="" in_progress="" done_cards="" archived=""
+    local backlog="" not_started="" in_progress="" done_cards=""
 
     for plan_file in "$OBSIDIAN_PLANS_DIR"/**/*.md(N); do
         local fname="$(basename "$plan_file")"
@@ -214,7 +214,7 @@ _rebuild_kanban() {
             not_started) not_started="${not_started}- [ ] ${link}\n" ;;
             in_progress) in_progress="${in_progress}- [ ] ${link}\n" ;;
             done)        done_cards="${done_cards}- [x] ${link}\n" ;;
-            archived)    archived="${archived}- [x] ${link}\n" ;;
+            archived)    ;;  # archived 不顯示在 Kanban，去 Dashboard 查看
         esac
     done
 
@@ -237,7 +237,6 @@ $(echo -e "${in_progress:-}")
 $(echo -e "${done_cards:-}")
 ## Archived
 
-$(echo -e "${archived:-}")
 %% kanban:settings
 {"kanban-plugin":"basic","lane-width":250,"show-checkboxes":false}
 %%
