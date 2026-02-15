@@ -70,13 +70,13 @@ Obsidian 端：
   └── obsidian-claude-code-mcp plugin → 提供 Claude Code MCP 讀寫能力
 
 Fallback（Obsidian 未開啟）：
-  └── Claude Code → Read/Grep 直接讀取 ~/Obsidian/DevBrain/
+  └── Claude Code → Read/Grep 直接讀取 ~/Code/Personal/obsidian-vault/
 ```
 
 ### Vault 結構
 
 ```
-~/Obsidian/DevBrain/
+~/Code/Personal/obsidian-vault/
 ├── .obsidian/                          ← Obsidian 設定（自動產生）
 ├── CLAUDE.md                           ← Claude Code 讀取的 vault 指引
 │
