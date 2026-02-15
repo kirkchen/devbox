@@ -151,12 +151,12 @@ _rebuild_kanban() {
         local rel_path="${plan_file#$OBSIDIAN_PLANS_DIR/}"
         local title="${fname%.md}"
 
-        local card="- [[${rel_path%.md}|${file_project}: ${title}]]"
+        local link="[[${rel_path%.md}|${file_project}: ${title}]]"
 
         case "$file_status" in
-            not_started) not_started="${not_started}${card}\n" ;;
-            in_progress) in_progress="${in_progress}${card}\n" ;;
-            done)        done="${done}${card}\n" ;;
+            not_started) not_started="${not_started}- [ ] ${link}\n" ;;
+            in_progress) in_progress="${in_progress}- [ ] ${link}\n" ;;
+            done)        done="${done}- [x] ${link}\n" ;;
         esac
     done
 
