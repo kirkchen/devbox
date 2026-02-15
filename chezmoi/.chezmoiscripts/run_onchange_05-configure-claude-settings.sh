@@ -1,8 +1,9 @@
 #!/bin/bash
-# Configure Claude Code settings and CLAUDE.md
+# Configure Claude Code settings, CLAUDE.md, and custom skills
 # This script:
 # 1. Merges permissions.deny into ~/.claude/settings.json
 # 2. Copies CLAUDE.md from chezmoi source to ~/.claude/CLAUDE.md
+# 3. Installs custom commands to ~/.claude/commands/
 #
 # run_onchange_: re-runs when this script's content changes
 # hash: {{ include ".chezmoiscripts/run_onchange_05-configure-claude-settings.sh" | sha256sum }}
@@ -51,6 +52,20 @@ if [ -n "$SOURCE_DIR" ] && [ -f "$CLAUDE_MD_SRC" ]; then
     echo "✓ Copied CLAUDE.md to ~/.claude/"
 else
     echo "⚠ CLAUDE.md source not found at $CLAUDE_MD_SRC, skipping"
+fi
+
+# --- 3. Install custom commands ---
+COMMANDS_SRC="${SOURCE_DIR}/claude-code/commands"
+
+if [ -n "$SOURCE_DIR" ] && [ -d "$COMMANDS_SRC" ]; then
+    mkdir -p "$HOME/.claude/commands"
+    for cmd_file in "$COMMANDS_SRC"/*.md; do
+        [ -f "$cmd_file" ] || continue
+        cp "$cmd_file" "$HOME/.claude/commands/"
+        echo "✓ Installed command: /$(basename "$cmd_file" .md)"
+    done
+else
+    echo "⚠ Commands source not found at $COMMANDS_SRC, skipping"
 fi
 
 echo "=== Claude Code configuration complete ==="
