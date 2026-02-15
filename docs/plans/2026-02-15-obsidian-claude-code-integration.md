@@ -2,42 +2,79 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 建立 Obsidian vault 作為 Claude Code 的知識庫和 plan 管理介面，包含 MCP 整合、plan 同步工具、Kanban 看板和 Dataview dashboard。
+**Goal:** 建立 Obsidian vault（GitHub private repo）作為 Claude Code + OpenClaw 共享的知識庫和 plan 管理介面。三端（Obsidian GUI、Claude Code、OpenClaw）透過 git 同步，commit 只在有意義的寫入時觸發。
 
-**Architecture:** Obsidian vault (`~/Obsidian/DevBrain/`) 透過 MCP Server 讓 Claude Code 即時讀寫。各專案的 `docs/plans/` 透過自訂 skill + shell function 同步到 vault 並加上 frontmatter。Obsidian 未開啟時 Claude Code 可直接讀取 vault 檔案作為 fallback。
+**Architecture:** Vault 是 `kirkchen/obsidian-vault` GitHub private repo，本機 clone 到 `~/Obsidian/DevBrain/`。Obsidian 用 obsidian-git plugin 同步，Claude Code 用 MCP + 直接檔案讀寫，OpenClaw 用 git-vault-sync sidecar。各專案的 `docs/plans/` 透過 `sync-plans` 工具同步到 vault 並加上 frontmatter。
 
-**Tech Stack:** Obsidian, obsidian-claude-code-mcp, Kanban plugin, Dataview plugin, Chezmoi (templates), Zsh (shell function)
+**Tech Stack:** Obsidian, obsidian-git, obsidian-claude-code-mcp, Kanban plugin, Dataview plugin, Chezmoi, Zsh, GitHub Private Repo
 
 ---
 
-## Stage 1: Vault 結構初始化
+## Stage 1: Vault Git Repo + 結構初始化
 
-### Task 1.1: 建立 Vault 目錄結構
+### Task 1.1: 建立 GitHub Private Repo 並 Clone
+
+**Step 1: 建立 GitHub private repo**
+
+```bash
+gh repo create kirkchen/obsidian-vault --private --description "Obsidian DevBrain vault - shared knowledge base for Claude Code and OpenClaw"
+```
+
+Expected: Repo 建立成功
+
+**Step 2: Clone 到本機**
+
+```bash
+mkdir -p ~/Obsidian
+git clone git@github.com:kirkchen/obsidian-vault.git ~/Obsidian/DevBrain
+```
+
+**Step 3: 驗證**
+
+```bash
+cd ~/Obsidian/DevBrain && git remote -v
+```
+
+Expected: 看到 `origin` 指向 `kirkchen/obsidian-vault`
+
+### Task 1.2: 建立 Vault 目錄結構
 
 **Files:**
-- Create: `~/Obsidian/DevBrain/Knowledge/Architecture/.gitkeep`
-- Create: `~/Obsidian/DevBrain/Knowledge/Debugging/.gitkeep`
-- Create: `~/Obsidian/DevBrain/Knowledge/Tools/.gitkeep`
-- Create: `~/Obsidian/DevBrain/Knowledge/Learning/.gitkeep`
-- Create: `~/Obsidian/DevBrain/Plans/.gitkeep`
-- Create: `~/Obsidian/DevBrain/Daily/.gitkeep`
-- Create: `~/Obsidian/DevBrain/Templates/.gitkeep`
+- Create: `~/Obsidian/DevBrain/` 下的目錄結構和 .gitkeep 檔案
 
 **Step 1: 建立目錄結構**
 
 ```bash
-mkdir -p ~/Obsidian/DevBrain/{Knowledge/{Architecture,Debugging,Tools,Learning},Plans,Daily,Templates}
+cd ~/Obsidian/DevBrain
+mkdir -p Knowledge/{Architecture,Debugging,Tools,Learning} Plans Daily Templates
+touch Knowledge/Architecture/.gitkeep Knowledge/Debugging/.gitkeep Knowledge/Tools/.gitkeep Knowledge/Learning/.gitkeep Plans/.gitkeep Daily/.gitkeep Templates/.gitkeep
 ```
 
-**Step 2: 驗證結構**
+**Step 2: 建立 .gitignore**
+
+```
+# Obsidian workspace (dynamic, don't sync)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+
+# Obsidian cache
+.obsidian/cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+```
+
+**Step 3: Commit 並 Push**
 
 ```bash
-ls -R ~/Obsidian/DevBrain/
+cd ~/Obsidian/DevBrain
+git add -A
+git commit -m "init: vault directory structure"
+git push
 ```
 
-Expected: 所有子目錄都已建立
-
-### Task 1.2: 建立 Vault CLAUDE.md
+### Task 1.3: 建立 Vault CLAUDE.md
 
 **Files:**
 - Create: `~/Obsidian/DevBrain/CLAUDE.md`
@@ -47,7 +84,7 @@ Expected: 所有子目錄都已建立
 ```markdown
 # DevBrain Vault
 
-This is an Obsidian knowledge base. Claude Code can read and search this vault via MCP or direct file access.
+This is an Obsidian knowledge base shared by Claude Code (local) and OpenClaw (K8s).
 
 ## Structure
 
@@ -69,17 +106,24 @@ This is an Obsidian knowledge base. Claude Code can read and search this vault v
 - Plans are synced from project `docs/plans/` directories, not authored here
 - Knowledge notes should have tags in frontmatter for discoverability
 - Use `[[wikilinks]]` for internal links
+
+## Writers
+
+- **User**: Manual notes via Obsidian GUI
+- **Claude Code**: Reads knowledge, syncs plans via `/sync-plans`
+- **OpenClaw**: Saves link summaries, research notes via Telegram
 ```
 
-**Step 2: 驗證**
+**Step 2: Commit**
 
 ```bash
-cat ~/Obsidian/DevBrain/CLAUDE.md
+cd ~/Obsidian/DevBrain
+git add CLAUDE.md
+git commit -m "docs: add vault CLAUDE.md for AI agents"
+git push
 ```
 
-Expected: 檔案內容如上
-
-### Task 1.3: 建立 Templates
+### Task 1.4: 建立 Templates
 
 **Files:**
 - Create: `~/Obsidian/DevBrain/Templates/Knowledge.md`
@@ -122,15 +166,20 @@ project:
 ## Lessons Learned
 ```
 
-**Step 3: 驗證**
+**Step 3: Commit**
 
 ```bash
-ls ~/Obsidian/DevBrain/Templates/
+cd ~/Obsidian/DevBrain
+git add Templates/
+git commit -m "feat: add Knowledge and Debug-Log templates"
+git push
 ```
 
-Expected: `Knowledge.md`, `Debug-Log.md`
+---
 
-### Task 1.4: 手動安裝 Obsidian Plugins
+## Stage 2: Obsidian Plugins + MCP Server 整合
+
+### Task 2.1: 手動安裝 Obsidian Plugins
 
 > **注意**: 此步驟需要手動操作 Obsidian GUI
 
@@ -145,42 +194,40 @@ Settings → Community plugins → Turn on community plugins
 **Step 3: 安裝必要 plugins**
 
 Browse → 搜尋並安裝以下 plugins：
-1. **Kanban** (by mgmeyers)
-2. **Dataview** (by Michael Brenan)
-3. **Tasks** (by Martin Schenck and Clare Macrae) — 可選
+1. **Obsidian Git** (by Vinzent03) — Git sync
+2. **Claude Code MCP** (by iansinnott) — MCP Server
+3. **Kanban** (by mgmeyers) — 看板管理
+4. **Dataview** (by Michael Brenan) — Dashboard 查詢
 
-**Step 4: 啟用已安裝的 plugins**
+**Step 4: 啟用所有剛安裝的 plugins**
 
-Settings → Community plugins → 確認所有剛安裝的 plugins 都已 enabled
+Settings → Community plugins → 確認所有 plugins 都已 enabled
 
-**Step 5: 驗證**
+**Step 5: 配置 Obsidian Git**
 
-在 Obsidian 中建立一個測試 Kanban 檔案：
-- 新增檔案 → 輸入 `---\nkanban-plugin: basic\n---\n\n## Test\n\n- [ ] test card`
-- 確認看到 Kanban 視圖
+Settings → Obsidian Git:
+- Auto pull interval: `5` (分鐘，自動拉取遠端變更)
+- Auto push: `OFF`（不自動 push，避免無意義 commit）
+- Pull on startup: `ON`
+- Commit on close: `ON`（關閉 Obsidian 時 commit 未儲存的變更）
+- Commit message: `obsidian: {{hostname}} - {{numFiles}} files changed`
 
-驗證後刪除測試檔案。
-
----
-
-## Stage 2: MCP Server 整合
-
-### Task 2.1: 安裝 obsidian-claude-code-mcp Plugin
-
-> **注意**: 此步驟需要手動操作 Obsidian GUI
-
-**Step 1: 安裝 plugin**
-
-Obsidian → Settings → Community plugins → Browse → 搜尋 "Claude Code MCP" → Install → Enable
-
-**Step 2: 確認 plugin 設定**
+**Step 6: 配置 Claude Code MCP**
 
 Settings → Claude Code MCP → 確認 port 為 22360（預設值）
 
-**Step 3: 驗證 WebSocket 啟動**
+**Step 7: 驗證 Git sync**
 
 ```bash
-# 確認 port 22360 有在監聽（Obsidian 必須開啟）
+cd ~/Obsidian/DevBrain && git log --oneline -3
+```
+
+Expected: 看到前面的 commits
+
+**Step 8: 驗證 MCP WebSocket**
+
+```bash
+# Obsidian 必須開啟
 lsof -i :22360
 ```
 
@@ -210,38 +257,22 @@ Expected: 看到 Obsidian 相關 process 在監聽
 
 位置：加在 `sequential-thinking` 之後、`github` 條件判斷之前。
 
-**Step 3: Apply chezmoi 更新**
+**Step 3: Apply chezmoi 並驗證**
 
 ```bash
 chezmoi diff --source="./chezmoi"
-```
-
-Expected: 看到 `.claude.json` 會被更新，新增 obsidian MCP server
-
-**Step 4: Apply 變更**
-
-```bash
 chezmoi apply --source="./chezmoi"
 ```
 
-**Step 5: 驗證 MCP 設定**
+**Step 4: 驗證 MCP 設定**
 
 ```bash
 cat ~/.claude.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('mcpServers',{}).get('obsidian',{}), indent=2))"
 ```
 
-Expected: 看到 `{"type": "websocket", "url": "ws://localhost:22360"}`
+Expected: `{"type": "websocket", "url": "ws://localhost:22360"}`
 
-**Step 6: 驗證 Claude Code 連接**
-
-開啟新的 Claude Code session，檢查 MCP 連接：
-```
-claude /mcp
-```
-
-Expected: 看到 obsidian MCP server 在列表中（Obsidian 需開啟）
-
-**Step 7: Commit**
+**Step 5: Commit**
 
 ```bash
 cd ~/Code/Personal/devbox
@@ -271,7 +302,7 @@ git commit -m "feat(chezmoi): add obsidian MCP server config for macOS"
 OBSIDIAN_VAULT="$HOME/Obsidian/DevBrain"
 OBSIDIAN_PLANS_DIR="$OBSIDIAN_VAULT/Plans"
 
-# sync-plans: 同步專案的 docs/plans/ 到 Obsidian vault
+# sync-plans: 同步專案的 docs/plans/ 到 Obsidian vault 並 commit + push
 #
 # Usage:
 #   sync-plans              # 同步當前專案
@@ -284,12 +315,18 @@ sync-plans() {
         return 1
     fi
 
+    # 先 pull 最新變更
+    git -C "$OBSIDIAN_VAULT" pull --rebase --quiet 2>/dev/null
+
+    local total_synced=0
+
     case "${1:-}" in
         -h|--help)
             echo "Usage: sync-plans [--all | /path/to/project]"
             echo ""
             echo "Sync docs/plans/ markdown files to Obsidian vault."
             echo "Adds frontmatter (project, source, synced, status, tags)."
+            echo "Auto commits and pushes to GitHub after sync."
             echo ""
             echo "Options:"
             echo "  --all         Sync all projects under ~/Code"
@@ -298,12 +335,12 @@ sync-plans() {
             return 0
             ;;
         --all)
-            local count=0
             for plans_dir in ~/Code/**/docs/plans(/N); do
                 local project_root="${plans_dir:h:h}"
-                _sync_plans_project "$project_root" && ((count++))
+                local count
+                count=$(_sync_plans_project "$project_root")
+                ((total_synced += count))
             done
-            echo "Synced plans from $count project(s)"
             ;;
         "")
             local project_root
@@ -312,19 +349,36 @@ sync-plans() {
                 echo "Error: Not in a git repository. Specify a path or use --all." >&2
                 return 1
             fi
-            _sync_plans_project "$project_root"
+            total_synced=$(_sync_plans_project "$project_root")
             ;;
         *)
             if [[ ! -d "$1" ]]; then
                 echo "Error: Directory '$1' does not exist." >&2
                 return 1
             fi
-            _sync_plans_project "$(cd "$1" && pwd)"
+            total_synced=$(_sync_plans_project "$(cd "$1" && pwd)")
             ;;
     esac
+
+    # Commit & push if there are changes
+    if [[ $total_synced -gt 0 ]]; then
+        local project_name
+        if [[ "${1:-}" == "--all" ]]; then
+            project_name="all projects"
+        else
+            project_name="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "${1:-unknown}")")"
+        fi
+
+        git -C "$OBSIDIAN_VAULT" add Plans/
+        git -C "$OBSIDIAN_VAULT" commit -m "sync-plans: $project_name ($total_synced files)"
+        git -C "$OBSIDIAN_VAULT" push --quiet
+        echo "Committed and pushed to GitHub."
+    else
+        echo "No changes to sync."
+    fi
 }
 
-# _sync_plans_project: 同步單一專案的 plans
+# _sync_plans_project: 同步單一專案的 plans，回傳同步檔案數
 _sync_plans_project() {
     local project_root="$1"
     local project_name="$(basename "$project_root")"
@@ -332,8 +386,8 @@ _sync_plans_project() {
     local target_dir="$OBSIDIAN_PLANS_DIR/$project_name"
 
     if [[ ! -d "$source_dir" ]]; then
-        echo "Skip: $project_name (no docs/plans/)"
-        return 1
+        echo 0
+        return
     fi
 
     mkdir -p "$target_dir"
@@ -356,7 +410,6 @@ _sync_plans_project() {
         # 讀取原始內容（跳過已有的 frontmatter）
         local content
         if head -1 "$source_file" | grep -q '^---$'; then
-            # 原始檔案有 frontmatter，取 frontmatter 結束後的內容
             content="$(awk '/^---$/{c++} c==2{found=1; next} found{print}' "$source_file")"
         else
             content="$(cat "$source_file")"
@@ -377,7 +430,8 @@ EOF
         ((synced++))
     done
 
-    echo "Synced: $project_name ($synced files → $target_dir)"
+    echo >&2 "Synced: $project_name ($synced files → $target_dir)"
+    echo $synced
 }
 ```
 
@@ -402,14 +456,14 @@ source ~/.zshrc
 **Step 5: 測試 sync-plans function**
 
 ```bash
-# 在 devbox 專案內測試
 cd ~/Code/Personal/devbox
 sync-plans
 ```
 
 Expected:
 ```
-Synced: devbox (3 files → ~/Obsidian/DevBrain/Plans/devbox)
+Synced: devbox (N files → ~/Obsidian/DevBrain/Plans/devbox)
+Committed and pushed to GitHub.
 ```
 
 **Step 6: 驗證 frontmatter**
@@ -454,16 +508,12 @@ git commit -m "feat(zsh): add sync-plans function for Obsidian plan sync"
 
 ### Task 3.2: 建立 /sync-plans Claude Code Skill（可選進階）
 
-> **注意**: 此 task 建立一個 Claude Code custom skill，讓 Claude Code 在 session 內呼叫 `/sync-plans` 來同步 plans 到 Obsidian vault。如果 shell function 已滿足需求，可跳過此 task。
+> 如果 shell function 已滿足需求，可跳過此 task。
 
 **Files:**
 - Create: `chezmoi/private_dot_claude/skills/sync-plans/SKILL.md`
 
-**Step 1: 確認 custom skills 放置位置**
-
-Claude Code custom skills 放在 `~/.claude/skills/<skill-name>/SKILL.md`。Chezmoi 管理路徑為 `chezmoi/private_dot_claude/skills/sync-plans/SKILL.md`。
-
-**Step 2: 建立 SKILL.md**
+**Step 1: 建立 SKILL.md**
 
 ```markdown
 ---
@@ -485,27 +535,27 @@ Sync the current project's `docs/plans/` files to the Obsidian vault at `~/Obsid
 
 **Step 1: Run sync**
 
-```bash
+\```bash
 sync-plans
-```
+\```
 
 **Step 2: Report results**
 
 Tell the user which plans were synced and remind them to check the Obsidian Kanban board if they want to update statuses.
 ```
 
-**Step 3: Apply chezmoi**
+**Step 2: Apply chezmoi**
 
 ```bash
 chezmoi diff --source="./chezmoi"
 chezmoi apply --source="./chezmoi"
 ```
 
-**Step 4: 驗證 skill 可用**
+**Step 3: 驗證 skill 可用**
 
 開啟新 Claude Code session，輸入 `/sync-plans`，確認 skill 被觸發。
 
-**Step 5: Commit**
+**Step 4: Commit**
 
 ```bash
 cd ~/Code/Personal/devbox
@@ -522,7 +572,7 @@ git commit -m "feat(claude): add /sync-plans skill for Obsidian plan sync"
 **Files:**
 - Create: `~/Obsidian/DevBrain/Plans/_Kanban.md`
 
-**Step 1: 同步現有 plans 到 vault**
+**Step 1: 確保 plans 已同步**
 
 ```bash
 sync-plans --all
@@ -542,9 +592,7 @@ kanban-plugin: basic
 ## Done
 
 %% kanban:settings
-```json
 {"kanban-plugin":"basic","lane-width":280,"show-checkboxes":false}
-```
 %%
 ```
 
@@ -564,10 +612,9 @@ kanban-plugin: basic
 **Files:**
 - Create: `~/Obsidian/DevBrain/Plans/_Dashboard.md`
 
-**Step 1: 啟用 Dataview JavaScript Queries（如需要）**
+**Step 1: 啟用 Dataview 設定**
 
 Obsidian → Settings → Dataview → Enable JavaScript Queries → ON
-Obsidian → Settings → Dataview → Enable Inline JavaScript Queries → ON
 
 **Step 2: 建立 Dashboard 檔案**
 
@@ -614,82 +661,68 @@ SORT synced DESC
 ```
 ````
 
-**Step 3: 驗證**
+**Step 3: Commit vault 變更**
 
-在 Obsidian 中開啟 `Plans/_Dashboard.md`，確認：
-- 表格顯示所有同步的 plans 及其 metadata
-- 各 status 區塊正確分類
+```bash
+cd ~/Obsidian/DevBrain
+git add Plans/_Kanban.md Plans/_Dashboard.md
+git commit -m "feat: add Kanban board and Dataview dashboard for plan tracking"
+git push
+```
+
+**Step 4: 驗證**
+
+在 Obsidian 中開啟 `Plans/_Dashboard.md`，確認表格顯示所有同步的 plans 及其 metadata。
 
 ---
 
-## Stage 5: Chezmoi 整合（可選）
+## Stage 5: OpenClaw Vault 整合
 
-### Task 5.1: 將 Obsidian Templates 納入 Chezmoi 管理
+### Task 5.1: 更新 OpenClaw git-vault-sync 策略
+
+> **注意**: 此 task 在 `personal-gitops` repo 的 `feat/openclaw-obsidian-vault` branch 上操作。
 
 **Files:**
-- Create: `chezmoi/Obsidian/DevBrain/Templates/Knowledge.md` (exact path TBD based on chezmoi external_ support)
+- Modify: `kubernetes/apps/apps/openclaw/values.yaml` (在 personal-gitops repo)
 
-> **注意**: Chezmoi 預設管理 `~` 下的 dotfiles。管理 `~/Obsidian/` 需要用 chezmoi 的 `exact_` prefix 或 external source。此 task 需先確認 chezmoi 的 target 路徑配置。
-
-**Step 1: 確認 chezmoi 是否支援管理 vault 路徑**
+**Step 1: 切換到 personal-gitops repo 的 feature branch**
 
 ```bash
-chezmoi target-path --source="./chezmoi"
+cd ~/Code/Personal/personal-gitops
+git checkout feat/openclaw-obsidian-vault
+git pull
 ```
 
-如果 chezmoi target 是 `~`，則可以用 `chezmoi/Obsidian/DevBrain/Templates/` 來管理。
+**Step 2: 更新 git-vault-sync 配置**
 
-**Step 2: 加入 templates**
+將 sync 策略從「定時 5 分鐘輪詢 commit」改為「只 pull，寫入由 OpenClaw agent 觸發」：
 
-將 Task 1.3 建立的 templates 加入 chezmoi：
+git-vault-sync sidecar 改為只負責 pull（每 5 分鐘拉取遠端變更）。
+commit & push 改由 OpenClaw agent 的 skill 在寫入後執行。
+
+**Step 3: 更新 OpenClaw link-summarizer skill**
+
+在 skill 的寫入步驟後加入 git commit & push：
 
 ```bash
-chezmoi add ~/Obsidian/DevBrain/Templates/Knowledge.md --source="./chezmoi"
-chezmoi add ~/Obsidian/DevBrain/Templates/Debug-Log.md --source="./chezmoi"
-chezmoi add ~/Obsidian/DevBrain/CLAUDE.md --source="./chezmoi"
+cd /vault
+git add -A
+git commit -m "openclaw: save link summary - <title>"
+git push
 ```
 
-**Step 3: 驗證**
+**Step 4: Commit 並 Push**
 
 ```bash
-chezmoi diff --source="./chezmoi"
+cd ~/Code/Personal/personal-gitops
+git add -A
+git commit -m "feat(openclaw): change vault sync to commit-on-write strategy"
+git push
 ```
 
-Expected: 無差異（因為檔案已經是最新的）
+**Step 5: 驗證**
 
-**Step 4: Commit**
-
-```bash
-cd ~/Code/Personal/devbox
-git add chezmoi/Obsidian/
-git commit -m "feat(chezmoi): add Obsidian vault templates and CLAUDE.md"
-```
-
-### Task 5.2: 將 Obsidian 基礎設定納入 Chezmoi（可選）
-
-> **注意**: `.obsidian/` 目錄包含大量 plugin 資料和 cache，不適合全部納入。只管理核心設定。
-
-**Step 1: 識別需要管理的設定檔**
-
-```bash
-ls ~/Obsidian/DevBrain/.obsidian/
-```
-
-需管理的：`app.json`, `appearance.json`, `community-plugins.json`, `hotkeys.json`
-不需管理的：`plugins/` (太大), `workspace.json` (動態), `cache/`
-
-**Step 2: 加入核心設定**
-
-```bash
-chezmoi add ~/Obsidian/DevBrain/.obsidian/app.json --source="./chezmoi"
-chezmoi add ~/Obsidian/DevBrain/.obsidian/appearance.json --source="./chezmoi"
-chezmoi add ~/Obsidian/DevBrain/.obsidian/community-plugins.json --source="./chezmoi"
-```
-
-**Step 3: Commit**
-
-```bash
-cd ~/Code/Personal/devbox
-git add chezmoi/Obsidian/
-git commit -m "feat(chezmoi): add Obsidian core settings for backup"
-```
+透過 Telegram 發一個連結給 OpenClaw，確認：
+1. OpenClaw 產生摘要並寫入 vault
+2. Commit message 是有意義的（不是 auto-sync）
+3. Obsidian 在下次 pull 時看到新筆記

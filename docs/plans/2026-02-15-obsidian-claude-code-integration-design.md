@@ -2,27 +2,54 @@
 
 ## Background
 
-目前使用 Claude Code + superpowers plugin 進行開發，plan 文件產生在各專案的 `docs/plans/` 下。需要一個知識管理系統來：
+目前使用 Claude Code + superpowers plugin 進行開發，plan 文件產生在各專案的 `docs/plans/` 下。另有 OpenClaw AI 助手跑在 K8s 上（透過 Telegram 互動），已有 `feat/openclaw-obsidian-vault` branch 規劃 vault 整合。需要一個統一的知識管理系統來：
 
-1. **知識庫** — 累積技術筆記、架構決策、debug 經驗，讓 Claude Code 可引用
+1. **知識庫** — 累積技術筆記、架構決策、debug 經驗，讓 Claude Code 和 OpenClaw 可引用
 2. **Plan 管理** — 追蹤各專案 plan 的完成狀態（Kanban + Dashboard）
-3. **雙向整合** — Claude Code 讀知識庫、同步 plan 到 Obsidian
+3. **多端整合** — Claude Code（本機）、OpenClaw（K8s）、使用者（Obsidian GUI）共享同一個 vault
 
 ## Goals
 
 - Obsidian 作為統一知識庫 + plan 管理介面
-- Claude Code 透過 MCP Server 讀寫 vault
+- Vault 是 GitHub private repo（`kirkchen/obsidian-vault`），三端透過 git 同步
+- Claude Code 透過 MCP Server 讀寫 vault（Obsidian 開啟時），或直接讀寫檔案（fallback）
+- OpenClaw 透過 git-vault-sync sidecar 讀寫 vault
 - Plan 從各專案同步到 vault（非 symlink），加上 frontmatter 供 Dataview 查詢
-- Obsidian 未開啟時 Claude Code 仍可直接讀取 vault 檔案（fallback）
 
 ## Non-Goals (YAGNI)
 
 - 不取代 Claude Code 的 `~/.claude/` memory 系統
 - 不在 Obsidian 內嵌 Claude Code terminal（已有 Zellij + zcc）
 - 不修改 superpowers plugin 原始路徑（避免升級覆蓋）
-- 不做自動化雙向同步（先手動觸發，需求明確後再自動化）
+- 不做定時自動 commit（commit 只在有意義的寫入時觸發）
 
 ## Architecture
+
+### 三端同步架構
+
+```
+┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│  Obsidian (Mac)  │     │  GitHub Private Repo  │     │  OpenClaw (K8s) │
+│                  │────▶│  kirkchen/            │◀────│                 │
+│  obsidian-git    │◀────│  obsidian-vault       │────▶│  git-vault-sync │
+│  plugin          │     │                      │     │  sidecar        │
+└────────┬─────────┘     └──────────────────────┘     └─────────────────┘
+         │ 本機檔案系統                                         │
+         │                                                     │
+┌────────▼─────────┐                                          寫入時
+│  Claude Code     │                                          立即 commit
+│                  │                                          有意義的
+│  MCP / 直接讀寫   │                                          commit msg
+└──────────────────┘
+```
+
+### Git Commit 策略（非定時輪詢）
+
+| 來源 | 觸發時機 | Commit Message 格式 |
+|------|----------|-------------------|
+| **使用者** | 手動 / 關閉 Obsidian 時 | 自由格式 |
+| **Claude Code** | `sync-plans` 執行後 | `sync-plans: <project> (<n> files)` |
+| **OpenClaw** | 寫入 vault 後立即 commit | `openclaw: <action> - <description>` |
 
 ### 整合架構
 
@@ -30,12 +57,17 @@
 Claude Code 工作時：
   ├── 寫 plan → 專案內 docs/plans/（superpowers 原生行為）
   ├── 讀知識庫 → MCP Server → Obsidian vault Knowledge/
-  └── /sync-plans → 複製 plan 到 vault Plans/ + 加 frontmatter
+  └── /sync-plans → 複製 plan 到 vault Plans/ + 加 frontmatter + git commit & push
+
+OpenClaw 工作時：
+  ├── 讀知識庫 → git-vault-sync → 本地 /vault 目錄
+  └── 寫入筆記 → Write → 立即 git commit & push（有意義的 message）
 
 Obsidian 端：
   ├── Kanban plugin → Plans/_Kanban.md（手動拖拉管理狀態）
   ├── Dataview → Plans/_Dashboard.md（自動查詢所有 plan 狀態）
-  └── obsidian-claude-code-mcp plugin → 提供 MCP 讀寫能力
+  ├── obsidian-git plugin → 定期 pull + 手動/關閉時 push
+  └── obsidian-claude-code-mcp plugin → 提供 Claude Code MCP 讀寫能力
 
 Fallback（Obsidian 未開啟）：
   └── Claude Code → Read/Grep 直接讀取 ~/Obsidian/DevBrain/
@@ -119,7 +151,8 @@ Claude Code MCP 設定（`~/.claude.json`）：
 
 | Plugin | 用途 | 優先級 |
 |--------|------|--------|
-| **obsidian-claude-code-mcp** | MCP Server，讓 Claude Code 讀寫 vault | 必要 |
+| **obsidian-git** (Vinzent03/obsidian-git) | Git 同步，pull/push vault 到 GitHub | 必要 |
+| **obsidian-claude-code-mcp** (iansinnott) | MCP Server，讓 Claude Code 讀寫 vault | 必要 |
 | **Kanban** (mgmeyers/obsidian-kanban) | Plan 看板管理，拖拉狀態 | 必要 |
 | **Dataview** (blacksmithgu/obsidian-dataview) | Dashboard 查詢 + 自動化視圖 | 必要 |
 | **Tasks** (obsidian-tasks-group/obsidian-tasks) | 進階 checkbox 任務管理 | 可選 |
@@ -156,19 +189,19 @@ kanban-plugin: basic
 
 ## Implementation Stages
 
-### Stage 1: Obsidian Vault 初始化
-**Goal**: 建立 vault 結構和安裝核心 plugins
-**Success Criteria**: Obsidian 可開啟 vault，Kanban/Dataview 可運作
+### Stage 1: Vault Git Repo + 結構初始化
+**Goal**: 建立 `kirkchen/obsidian-vault` GitHub private repo，初始化 vault 目錄結構和 templates
+**Success Criteria**: Vault repo 已建立，目錄結構完整，可被 Obsidian 開啟
 **Status**: Not Started
 
-### Stage 2: MCP Server 整合
-**Goal**: Claude Code 可透過 MCP 讀寫 vault
-**Success Criteria**: Claude Code 內可搜尋/讀取 vault 筆記
+### Stage 2: Obsidian Plugins + MCP Server 整合
+**Goal**: 安裝 obsidian-git、claude-code-mcp、Kanban、Dataview plugins，Claude Code 可透過 MCP 讀寫 vault
+**Success Criteria**: obsidian-git 可 push/pull，Claude Code 內可搜尋/讀取 vault 筆記
 **Status**: Not Started
 
 ### Stage 3: Plan 同步工具
-**Goal**: 建立 `/sync-plans` skill 和 `sync-plans` shell function
-**Success Criteria**: 可從專案同步 plans 到 vault，含 frontmatter
+**Goal**: 建立 `/sync-plans` skill 和 `sync-plans` shell function，同步後 commit & push
+**Success Criteria**: 可從專案同步 plans 到 vault，含 frontmatter，有意義的 commit message
 **Status**: Not Started
 
 ### Stage 4: Dashboard 和 Kanban 設定
@@ -176,15 +209,16 @@ kanban-plugin: basic
 **Success Criteria**: 可在 Obsidian 中視覺化管理所有 plans 狀態
 **Status**: Not Started
 
-### Stage 5: Chezmoi 整合（可選）
-**Goal**: 將 Obsidian 設定和 templates 納入 chezmoi 管理
-**Success Criteria**: 新環境可一鍵復原 Obsidian 設定
+### Stage 5: OpenClaw Vault 整合
+**Goal**: 更新 personal-gitops OpenClaw 配置，改為寫入後立即 commit（非定時輪詢）
+**Success Criteria**: OpenClaw 寫入 vault 後立即 commit & push，commit message 有意義
 **Status**: Not Started
 
 ## References
 
 - [obsidian-claude-code-mcp](https://github.com/iansinnott/obsidian-claude-code-mcp) — MCP Server plugin
+- [obsidian-git](https://github.com/Vinzent03/obsidian-git) — Git sync plugin
 - [Obsidian Kanban](https://github.com/mgmeyers/obsidian-kanban) — Kanban plugin
 - [Obsidian Dataview](https://blacksmithgu.github.io/obsidian-dataview/) — Dataview plugin
-- [Claudesidian](https://github.com/heyitsnoah/claudesidian) — 預配置 vault 參考
+- [OpenClaw Obsidian 整合](../../../personal-gitops/) — `feat/openclaw-obsidian-vault` branch
 - [Kyle Gao: Using Claude Code with Obsidian](https://kyleygao.com/blog/2025/using-claude-code-with-obsidian/)
