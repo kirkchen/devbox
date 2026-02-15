@@ -117,6 +117,16 @@ _sync_plans_project() {
             content="$(cat "$source_file")"
         fi
 
+        # 偵測對應的 design 檔
+        local design_link=""
+        local base_name="${filename%.md}"
+        if [[ "$base_name" != *-design ]]; then
+            local design_file="${base_name}-design.md"
+            if [[ -f "$target_dir/$design_file" ]]; then
+                design_link="\"[[${project_name}/${base_name}-design|${design_file}]]\""
+            fi
+        fi
+
         # 寫入帶 frontmatter 的檔案
         cat > "$target_file" <<ENDOFPLAN
 ---
@@ -124,7 +134,8 @@ project: $project_name
 source: docs/plans/$filename
 synced: $today
 status: $plan_status
-tags: [plan, $project_name]
+${design_link:+design: $design_link
+}tags: [plan, $project_name]
 ---
 
 $content
@@ -148,18 +159,25 @@ _sync_kanban_status() {
             "## In Progress")  current_lane="in_progress" ;;
             "## Done")         current_lane="done" ;;
             "## Archived")     current_lane="archived" ;;
-            *"[["*"]"*)
+            *)
+                # 檢查是否包含 [[ 連結
+                [[ "$line" != *'[['* ]] && continue
                 [[ -z "$current_lane" ]] && continue
                 # 從 [[path|title]] 取出 path
-                local link_path="${line#*[[}"
+                local link_path="${line#*\[\[}"
                 link_path="${link_path%%|*}"
-                link_path="${link_path%%]*}"
+                link_path="${link_path%%\]\]*}"
                 local plan_file="$OBSIDIAN_PLANS_DIR/${link_path}.md"
                 [[ ! -f "$plan_file" ]] && continue
-                # 反寫 status 到 frontmatter
+                # 反寫 status 到 implementation plan
                 local old_status="$(awk '/^---$/{c++; next} c==1 && /^status:/{print $2; exit}' "$plan_file")"
                 if [[ "$old_status" != "$current_lane" ]]; then
                     sed -i '' "s/^status: .*/status: $current_lane/" "$plan_file"
+                fi
+                # 同步 status 到對應的 design 檔
+                local design_file="${plan_file%.md}-design.md"
+                if [[ -f "$design_file" ]]; then
+                    sed -i '' "s/^status: .*/status: $current_lane/" "$design_file"
                 fi
                 ;;
         esac
@@ -175,12 +193,20 @@ _rebuild_kanban() {
         local fname="$(basename "$plan_file")"
         [[ "$fname" == _* ]] && continue
 
+        # 跳過 design 檔：如果對應的 implementation plan 存在
+        if [[ "$fname" == *-design.md ]]; then
+            local impl_file="${plan_file%-design.md}.md"
+            [[ -f "$impl_file" ]] && continue
+        fi
+
         local file_status="$(awk '/^---$/{c++; next} c==1 && /^status:/{print $2; exit}' "$plan_file")"
         local file_project="$(awk '/^---$/{c++; next} c==1 && /^project:/{print $2; exit}' "$plan_file")"
         [[ -z "$file_status" ]] && file_status="backlog"
 
         local rel_path="${plan_file#$OBSIDIAN_PLANS_DIR/}"
         local title="${fname%.md}"
+        # 清理標題：移除 -design 後綴
+        title="${title%-design}"
         local link="[[${rel_path%.md}|${file_project}: ${title}]]"
 
         case "$file_status" in
