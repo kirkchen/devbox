@@ -29,6 +29,8 @@ synced_fields='{
   }
 }'
 
+bell_hook='{"type":"command","command":"printf \"\\a\"","async":true}'
+
 if command -v jq &>/dev/null; then
     if [ ! -f "$SETTINGS_FILE" ]; then
         echo "$synced_fields" | jq '.' > "$SETTINGS_FILE"
@@ -39,6 +41,22 @@ if command -v jq &>/dev/null; then
         mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
         echo "✓ Updated $SETTINGS_FILE (merged permissions.deny)"
     fi
+
+    # Ensure bell hook exists in Notification and Stop hooks
+    for event in Notification Stop; do
+        has_bell=$(jq --argjson hook "$bell_hook" \
+            "[.hooks.${event}[]?.hooks[]? | select(.command == \$hook.command)] | length" \
+            "$SETTINGS_FILE" 2>/dev/null || echo "0")
+        if [ "$has_bell" = "0" ]; then
+            jq --argjson hook "$bell_hook" \
+                "if .hooks.${event} then .hooks.${event}[0].hooks += [\$hook] else .hooks.${event} = [{\"hooks\": [\$hook]}] end" \
+                "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+            mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+            echo "✓ Added bell hook to ${event}"
+        else
+            echo "✓ Bell hook already exists in ${event}"
+        fi
+    done
 else
     echo "⚠ jq not found, skipping settings.json configuration"
 fi

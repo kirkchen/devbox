@@ -19,6 +19,11 @@ set -g history-limit 5000
 # Enable mouse scroll
 setw -g mouse on
 
+# Monitor bell across all sessions (for Claude Code notifications)
+set -g bell-action any
+set -g visual-bell off
+setw -g monitor-bell on
+
 # Shift arrow to switch windows
 bind -n S-Left  previous-window
 bind -n S-Right next-window
@@ -41,12 +46,16 @@ bind p run-shell "~/.config/tmux/sessionizer.sh"
 
 # Catppuccin theme
 set -g @catppuccin_flavor 'mocha'
+set -g @catppuccin_window_flags 'icon'
+set -g @catppuccin_window_flags_icon_last ''
+set -g @catppuccin_window_flags_icon_current ''
+set -g @catppuccin_window_status_style 'basic'
 
 # Status line (before TPM so tmux-cpu can interpolate #{cpu_percentage})
 set -g status-right-length 100
 set -g status-left-length 100
 set -g status-left ""
-set -g status-right "#{E:@catppuccin_status_session}"
+set -g status-right "#[fg=#f38ba8]#(~/.config/tmux/bell-indicator.sh)#[default]#{E:@catppuccin_status_session}"
 set -agF status-right "#{E:@catppuccin_status_cpu}"
 set -ag status-right "#{E:@catppuccin_status_directory}"
 set -ag status-right "#{E:@catppuccin_status_date_time}"
