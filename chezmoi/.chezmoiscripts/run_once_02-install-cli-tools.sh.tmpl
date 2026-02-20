@@ -23,6 +23,7 @@ if command_exists brew; then
     command_exists direnv || brew install direnv
     command_exists zellij || brew install zellij
     command_exists lazygit || brew install lazygit
+    command_exists yazi || brew install yazi
     command_exists delta || brew install git-delta
     command_exists alacritty || brew install --cask alacritty
 
@@ -144,7 +145,7 @@ echo "✅ CLI tools installation complete!"
 # Summary of installed tools
 echo ""
 echo "📋 Tool status:"
-for tool in fzf eza bat ag tig zellij lazygit delta claude htop direnv; do
+for tool in fzf eza bat ag tig zellij lazygit yazi delta claude htop direnv; do
     if command_exists "$tool" || ([ "$tool" = "bat" ] && command_exists batcat); then
         echo "  ✅ $tool"
     else
