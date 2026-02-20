@@ -1,7 +1,7 @@
 # === Obsidian Integration ===
 
 OBSIDIAN_VAULT="$HOME/Code/Personal/obsidian-vault"
-OBSIDIAN_PLANS_DIR="$OBSIDIAN_VAULT/Plans"
+OBSIDIAN_PLANS_DIR="$OBSIDIAN_VAULT/Projects"
 
 # sync-plans: 同步專案的 docs/plans/ 到 Obsidian vault 並 commit + push
 #
@@ -63,8 +63,8 @@ sync-plans() {
     _rebuild_kanban
 
     # Commit & push if vault has changes
-    if ! git -C "$OBSIDIAN_VAULT" diff --quiet Plans/ 2>/dev/null || \
-       [[ -n "$(git -C "$OBSIDIAN_VAULT" ls-files --others --exclude-standard Plans/)" ]]; then
+    if ! git -C "$OBSIDIAN_VAULT" diff --quiet Projects/ 2>/dev/null || \
+       [[ -n "$(git -C "$OBSIDIAN_VAULT" ls-files --others --exclude-standard Projects/)" ]]; then
         local commit_msg
         if [[ "${1:-}" == "--all" ]]; then
             commit_msg="sync-plans: all projects"
@@ -73,7 +73,7 @@ sync-plans() {
             commit_msg="sync-plans: $pname"
         fi
 
-        git -C "$OBSIDIAN_VAULT" add Plans/
+        git -C "$OBSIDIAN_VAULT" add Projects/
         git -C "$OBSIDIAN_VAULT" commit -m "$commit_msg"
         git -C "$OBSIDIAN_VAULT" push --quiet
         echo "Committed and pushed to GitHub."
@@ -87,7 +87,7 @@ _sync_plans_project() {
     local project_root="$1"
     local project_name="$(basename "$project_root")"
     local source_dir="$project_root/docs/plans"
-    local target_dir="$OBSIDIAN_PLANS_DIR/$project_name"
+    local target_dir="$OBSIDIAN_PLANS_DIR/$project_name/plans"
 
     if [[ ! -d "$source_dir" ]]; then
         return
@@ -123,7 +123,7 @@ _sync_plans_project() {
         if [[ "$base_name" != *-design ]]; then
             local design_file="${base_name}-design.md"
             if [[ -f "$target_dir/$design_file" ]]; then
-                design_link="\"[[${project_name}/${base_name}-design|${design_file}]]\""
+                design_link="\"[[${project_name}/plans/${base_name}-design|${design_file}]]\""
             fi
         fi
 
