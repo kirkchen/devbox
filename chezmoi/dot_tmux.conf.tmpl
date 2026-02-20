@@ -32,6 +32,13 @@ bind g split-window -h -l '60%' -c '#{pane_current_path}' lazygit
 # Yazi file manager in vertical split
 bind e split-window -h -l '60%' -c '#{pane_current_path}' yazi
 
+# tmux-sessionx (switch between existing sessions)
+set -g @sessionx-bind 'o'
+set -g @sessionx-zoxide-mode 'on'
+
+# Project sessionizer (create new session from project directory)
+bind p run-shell "~/.config/tmux/sessionizer.sh"
+
 # List of plugins
 set -g @tpm_plugins '                     \
     caiogondim/maglev                     \
@@ -45,6 +52,7 @@ set -g @tpm_plugins '                     \
     tmux-plugins/tmux-open                \
     tmux-plugins/tmux-cpu                 \
     tmux-plugins/tmux-prefix-highlight    \
+    omerxx/tmux-sessionx                  \
 '
 
 # Initialize TMUX plugin manager
