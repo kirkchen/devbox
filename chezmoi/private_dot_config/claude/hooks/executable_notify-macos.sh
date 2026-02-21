@@ -24,4 +24,4 @@ case "$EVENT" in
         ;;
 esac
 
-osascript -e "display notification \"$MSG\" with title \"$TITLE\""
+terminal-notifier -title "$TITLE" -message "$MSG" -sound default
