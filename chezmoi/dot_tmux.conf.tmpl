@@ -19,10 +19,10 @@ set -g history-limit 5000
 # Enable mouse scroll
 setw -g mouse on
 
-# Monitor bell across all sessions (for Claude Code notifications)
-set -g bell-action any
-set -g visual-bell off
-setw -g monitor-bell on
+# Agent indicator (Claude Code state: running/needs-input/done)
+set -g @agent-indicator-border-enabled 'on'
+set -g @agent-indicator-indicator-enabled 'on'
+set -g @agent-indicator-reset-on-focus 'on'
 
 # Shift arrow to switch windows
 bind -n S-Left  previous-window
@@ -56,7 +56,7 @@ set -g @catppuccin_window_status_style 'basic'
 set -g status-right-length 100
 set -g status-left-length 100
 set -g status-left ""
-set -g status-right "#[fg=#f38ba8]#(~/.config/tmux/bell-indicator.sh)#[default]#{E:@catppuccin_status_session}"
+set -g status-right "#{agent_indicator}#{E:@catppuccin_status_session}"
 set -agF status-right "#{E:@catppuccin_status_cpu}"
 set -ag status-right "#{E:@catppuccin_status_directory}"
 set -ag status-right "#{E:@catppuccin_status_date_time}"
@@ -75,6 +75,7 @@ set -g @tpm_plugins '                     \
     catppuccin/tmux#v2.1.3                \
     tmux-plugins/tmux-cpu                 \
     omerxx/tmux-sessionx                  \
+    accessd/tmux-agent-indicator          \
 '
 
 # Initialize TMUX plugin manager

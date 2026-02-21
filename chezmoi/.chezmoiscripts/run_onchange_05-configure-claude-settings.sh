@@ -29,7 +29,7 @@ synced_fields='{
   }
 }'
 
-bell_hook='{"type":"command","command":"printf \"\\a\"","async":true}'
+agent_state_cmd="~/.tmux/plugins/tmux-agent-indicator/scripts/agent-state.sh"
 
 if command -v jq &>/dev/null; then
     if [ ! -f "$SETTINGS_FILE" ]; then
@@ -42,21 +42,47 @@ if command -v jq &>/dev/null; then
         echo "✓ Updated $SETTINGS_FILE (merged permissions.deny)"
     fi
 
-    # Ensure bell hook exists in Notification and Stop hooks
-    for event in Notification Stop; do
-        has_bell=$(jq --argjson hook "$bell_hook" \
-            "[.hooks.${event}[]?.hooks[]? | select(.command == \$hook.command)] | length" \
+    # Ensure agent-indicator hooks exist for Claude Code state tracking
+    for pair in \
+        "UserPromptSubmit:$agent_state_cmd --agent claude --state running" \
+        "Notification:$agent_state_cmd --agent claude --state needs-input" \
+        "Stop:$agent_state_cmd --agent claude --state done"; do
+        event="${pair%%:*}"
+        hook_cmd="${pair#*:}"
+        hook_json="{\"type\":\"command\",\"command\":\"${hook_cmd}\",\"async\":true}"
+        has_hook=$(jq --arg cmd "$hook_cmd" \
+            "[.hooks.${event}[]?.hooks[]? | select(.command == \$cmd)] | length" \
             "$SETTINGS_FILE" 2>/dev/null || echo "0")
-        if [ "$has_bell" = "0" ]; then
-            jq --argjson hook "$bell_hook" \
+        if [ "$has_hook" = "0" ]; then
+            jq --argjson hook "$hook_json" \
                 "if .hooks.${event} then .hooks.${event}[0].hooks += [\$hook] else .hooks.${event} = [{\"hooks\": [\$hook]}] end" \
                 "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
             mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-            echo "✓ Added bell hook to ${event}"
+            echo "✓ Added agent-indicator hook to ${event}"
         else
-            echo "✓ Bell hook already exists in ${event}"
+            echo "✓ Agent-indicator hook already exists in ${event}"
         fi
     done
+
+    # macOS notifications via notify script for Notification and Stop events
+    if [ "$(uname)" = "Darwin" ]; then
+        notify_cmd="~/.config/claude/hooks/notify-macos.sh"
+        for event in Notification Stop; do
+            hook_json="{\"type\":\"command\",\"command\":\"${notify_cmd}\",\"async\":true}"
+            has_hook=$(jq --arg cmd "$notify_cmd" \
+                "[.hooks.${event}[]?.hooks[]? | select(.command == \$cmd)] | length" \
+                "$SETTINGS_FILE" 2>/dev/null || echo "0")
+            if [ "$has_hook" = "0" ]; then
+                jq --argjson hook "$hook_json" \
+                    "if .hooks.${event} then .hooks.${event}[0].hooks += [\$hook] else .hooks.${event} = [{\"hooks\": [\$hook]}] end" \
+                    "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                echo "✓ Added macOS notification hook to ${event}"
+            else
+                echo "✓ macOS notification hook already exists in ${event}"
+            fi
+        done
+    fi
 else
     echo "⚠ jq not found, skipping settings.json configuration"
 fi
