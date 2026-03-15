@@ -165,10 +165,21 @@ alias gcoi="..."           # 互動式切換分支
 
 ### Settings (`~/.claude/settings.json`)
 
+- **defaultMode**: `acceptEdits` (auto-approve file operations, Bash still needs permission)
+- **sandbox**: enabled with `auto-allow` (OS-level filesystem + network isolation)
 - **statusLine**: Shows `🌿 branch | model | directory`
 - **enabledPlugins**: code-review, superpowers
 - **language**: Traditional Chinese (zh-TW)
-- **permissions.deny**: Blocks `.env*`, `secrets/`, `rm -rf /`
+- **permissions**: Layered allow (66) / ask (22) / deny (33) rules
+
+### Security Hooks
+
+- **PreToolUse (Bash)**: `security-guard.sh` — blocks dangerous patterns (rm -rf /, curl|sh, DROP TABLE, etc.)
+- **PreToolUse (Write|Edit|MultiEdit)**: `protect-files.sh` — blocks writes to .env, secrets/, SSH keys, lock files
+- **PreCompact**: transcript backup before context compaction
+- **Stop**: prompt hook for LLM task completeness verification
+
+Hook scripts are managed in `chezmoi/private_dot_config/claude/hooks/` and deployed to `~/.config/claude/hooks/`.
 
 ### MCP Servers (`~/.claude.json`)
 
@@ -181,6 +192,7 @@ alias gcoi="..."           # 互動式切換分支
 1. `run_once_01-install-oh-my-zsh.sh` - Oh-My-Zsh and plugins
 2. `run_once_02-install-cli-tools.sh` - CLI tools via Homebrew/apt (includes lazygit, delta)
 3. `run_once_04-install-claude-plugins.sh` - Claude Code plugins
+4. `run_onchange_05-configure-claude-settings.sh` - Settings, permissions, hooks, CLAUDE.md, commands
 
 ## Development Workflow
 
