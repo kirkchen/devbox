@@ -158,7 +158,11 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Bash(npm install *)", "Bash(npm run *)", "Bash(npx *)",
 
       "Bash(curl *)", "Bash(wget *)",
-      "Bash(docker *)", "Bash(kubectl *)", "Bash(helm *)",
+      "Bash(docker *)", "Bash(helm *)",
+      "Bash(kubectl apply *)", "Bash(kubectl delete *)",
+      "Bash(kubectl exec *)", "Bash(kubectl scale *)",
+      "Bash(kubectl rollout *)", "Bash(kubectl patch *)",
+      "Bash(kubectl edit *)", "Bash(kubectl create *)",
 
       "Bash(rm *)", "Bash(rmdir *)"
     ],
