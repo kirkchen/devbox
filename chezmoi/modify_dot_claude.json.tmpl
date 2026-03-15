@@ -16,19 +16,6 @@ DESIRED_MCP='{
     "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
     "env": {}
   }
-{{- if and (hasKey . "github_token") .github_token }},
-  "github": {
-  {{- if .is_devcontainer }}
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-github"],
-    "env": { "GITHUB_TOKEN": "{{ .github_token }}" }
-  {{- else }}
-    "command": "docker",
-    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
-    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "{{ .github_token }}" }
-  {{- end }}
-  }
-{{- end }}
 }'
 
 # Read existing file from stdin

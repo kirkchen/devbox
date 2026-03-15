@@ -116,6 +116,9 @@ synced_fields=$(cat <<'SETTINGS_EOF'
   "permissions": {
     "allow": [
       "Glob", "Grep", "LS", "Task",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+      "mcp__sequential-thinking__sequentialthinking",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:registry.npmjs.org)",
