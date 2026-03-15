@@ -162,6 +162,7 @@ synced_fields=$(cat <<'SETTINGS_EOF'
 
       "Bash(curl *)", "Bash(wget *)",
       "Bash(docker *)", "Bash(helm *)",
+      "Bash(kubectl get secret*)", "Bash(kubectl describe secret*)",
       "Bash(kubectl apply *)", "Bash(kubectl delete *)",
       "Bash(kubectl exec *)", "Bash(kubectl scale *)",
       "Bash(kubectl rollout *)", "Bash(kubectl patch *)",
