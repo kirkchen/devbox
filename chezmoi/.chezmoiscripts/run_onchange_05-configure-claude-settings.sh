@@ -141,7 +141,11 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Bash(sed *)", "Bash(awk *)", "Bash(cut *)", "Bash(tr *)",
       "Bash(tee *)", "Bash(xargs *)", "Bash(chmod *)",
 
-      "Bash(python *)", "Bash(python3 *)", "Bash(node *)"
+      "Bash(python *)", "Bash(python3 *)", "Bash(node *)",
+
+      "Bash(kubectl get *)", "Bash(kubectl describe *)",
+      "Bash(kubectl logs *)", "Bash(kubectl config *)",
+      "Bash(kubectl top *)", "Bash(kubectl explain *)"
     ],
 
     "ask": [
@@ -163,6 +167,8 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Read(.env*)",
       "Read(**/secrets/**)",
       "Write(.env*)",
+
+      "Bash(kubectl get secret*)", "Bash(kubectl describe secret*)",
 
       "Bash(sudo *)", "Bash(sudo)",
       "Bash(git push --force *)", "Bash(git push -f *)",
