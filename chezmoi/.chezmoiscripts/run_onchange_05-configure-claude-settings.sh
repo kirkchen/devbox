@@ -270,7 +270,24 @@ else
 fi
 
 # ============================================================
-# 4. Install custom commands
+# 4. Install rules
+# ============================================================
+
+RULES_SRC="${SOURCE_DIR}/claude-code/rules"
+
+if [ -n "$SOURCE_DIR" ] && [ -d "$RULES_SRC" ]; then
+    mkdir -p "$HOME/.claude/rules"
+    for rule_file in "$RULES_SRC"/*.md; do
+        [ -f "$rule_file" ] || continue
+        cp "$rule_file" "$HOME/.claude/rules/"
+        echo "✓ Installed rule: $(basename "$rule_file")"
+    done
+else
+    echo "⚠ Rules source not found at $RULES_SRC, skipping"
+fi
+
+# ============================================================
+# 5. Install custom commands
 # ============================================================
 
 COMMANDS_SRC="${SOURCE_DIR}/claude-code/commands"
