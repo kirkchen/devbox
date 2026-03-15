@@ -251,11 +251,6 @@ if command -v jq &>/dev/null; then
     backup_json=$(jq -n --arg cmd "$backup_cmd" '{"type":"command","command":$cmd,"async":true,"timeout":10}')
     ensure_hook "PreCompact" "$backup_cmd" "$backup_json"
 
-    # -- Stop: LLM completeness check --
-    ensure_prompt_hook "Stop" \
-        "Review whether the task is fully complete. Check: 1) Were all requested changes made? 2) Were tests run if code was modified? 3) Are there any obvious issues? If everything looks complete, respond with 'complete'. If work remains, respond with 'continue' and specify what still needs to be done." \
-        30
-
 else
     echo "⚠ jq not found, skipping settings.json configuration"
 fi
