@@ -49,6 +49,7 @@ plugins=(
   command-not-found
   extract
   sudo
+  zsh-syntax-highlighting
 )
 
 # Source Oh-My-Zsh
