@@ -28,3 +28,25 @@ function fixup {
         git stash pop > /dev/null
     fi
 }
+
+# kt: K8s tunnel 管理 (via Cloudflare)
+# Usage: kt [start|stop|status]
+function kt {
+    local proc="cloudflared access tcp.*k8s.kirkchen.dev"
+    case "${1:-start}" in
+        start)
+            if pgrep -f "$proc" > /dev/null; then
+                echo "✓ Already running (PID: $(pgrep -f "$proc"))"
+            else
+                cloudflared access tcp --hostname k8s.kirkchen.dev --url 127.0.0.1:16443 &
+                echo "✓ Started (PID: $!)"
+            fi ;;
+        stop)
+            pkill -f "$proc" && echo "✗ Stopped" || echo "Not running" ;;
+        status)
+            pgrep -f "$proc" > /dev/null \
+                && echo "✓ Running (PID: $(pgrep -f "$proc"))" \
+                || echo "✗ Not running" ;;
+        *) echo "Usage: kt [start|stop|status]" ;;
+    esac
+}
