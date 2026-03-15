@@ -1,10 +1,11 @@
 # Security Behavior
 
 ## Credential Handling
-- NEVER read, display, or log secrets (API keys, passwords, tokens, private keys)
-- If you encounter credentials in code or config, STOP and warn the user immediately
 - NEVER hardcode secrets — always use environment variables or secret managers
+- If you encounter credentials in code or config, STOP and warn the user immediately
 - If a secret may have been exposed, remind the user to rotate it
+- Displaying partial secrets for identification is OK (e.g., `sk-...abc123`)
+- Piping secrets to commands without displaying them is OK (e.g., `kubectl get secret ... | base64 -d | curl ...`)
 
 ## Sensitive Files
 - Do NOT read or modify: .env*, ~/.ssh/*, ~/.aws/*, ~/.kube/config, **/secrets/**

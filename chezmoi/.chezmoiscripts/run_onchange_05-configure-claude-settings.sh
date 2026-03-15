@@ -175,7 +175,6 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Read(**/secrets/**)",
       "Write(.env*)",
 
-      "Bash(kubectl get secret*)", "Bash(kubectl describe secret*)",
 
       "Bash(sudo *)", "Bash(sudo)",
       "Bash(git push --force *)", "Bash(git push -f *)",
