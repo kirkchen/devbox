@@ -158,7 +158,7 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Bash(pnpm install *)", "Bash(pnpm add *)", "Bash(pnpm remove *)",
       "Bash(pnpm run *)", "Bash(pnpm start *)", "Bash(pnpm dev *)",
       "Bash(pnpm exec *)",
-      "Bash(npm install *)", "Bash(npm run *)", "Bash(npx *)",
+      "Bash(npm install *)", "Bash(npm run *)",
 
       "Bash(curl *)", "Bash(wget *)",
       "Bash(docker *)", "Bash(helm *)",
