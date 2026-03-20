@@ -16,6 +16,9 @@ set -sg escape-time 0
 # Set tmux limit
 set -g history-limit 5000
 
+# Switch to another session instead of detaching when a session is destroyed
+set -g detach-on-destroy no-detach
+
 # Enable mouse scroll
 setw -g mouse on
 
