@@ -220,23 +220,25 @@ if command -v jq &>/dev/null; then
     protect_files_cmd="~/.config/claude/hooks/protect-files.sh"
 
     # -- Agent indicator hooks (tmux state tracking) --
-    for pair in \
-        "UserPromptSubmit:${agent_state_cmd} --agent claude --state running" \
-        "Notification:${agent_state_cmd} --agent claude --state needs-input" \
-        "Stop:${agent_state_cmd} --agent claude --state done"; do
-        event="${pair%%:*}"
-        hook_cmd="${pair#*:}"
-        hook_json=$(jq -n --arg cmd "$hook_cmd" '{"type":"command","command":$cmd,"async":true}')
-        ensure_hook "$event" "$hook_cmd" "$hook_json"
-    done
+    # Disabled: using cmux, tmux agent indicator not needed
+    # for pair in \
+    #     "UserPromptSubmit:${agent_state_cmd} --agent claude --state running" \
+    #     "Notification:${agent_state_cmd} --agent claude --state needs-input" \
+    #     "Stop:${agent_state_cmd} --agent claude --state done"; do
+    #     event="${pair%%:*}"
+    #     hook_cmd="${pair#*:}"
+    #     hook_json=$(jq -n --arg cmd "$hook_cmd" '{"type":"command","command":$cmd,"async":true}')
+    #     ensure_hook "$event" "$hook_cmd" "$hook_json"
+    # done
 
     # -- macOS notifications (Darwin only) --
-    if [ "$(uname)" = "Darwin" ]; then
-        for event in Notification Stop; do
-            hook_json=$(jq -n --arg cmd "$notify_cmd" '{"type":"command","command":$cmd,"async":true}')
-            ensure_hook "$event" "$notify_cmd" "$hook_json"
-        done
-    fi
+    # Disabled: using cmux, desktop notifications not needed
+    # if [ "$(uname)" = "Darwin" ]; then
+    #     for event in Notification Stop; do
+    #         hook_json=$(jq -n --arg cmd "$notify_cmd" '{"type":"command","command":$cmd,"async":true}')
+    #         ensure_hook "$event" "$notify_cmd" "$hook_json"
+    #     done
+    # fi
 
     # -- Security: PreToolUse hooks --
     sg_json=$(jq -n --arg cmd "$security_guard_cmd" '{"type":"command","command":$cmd}')
