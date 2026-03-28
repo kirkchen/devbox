@@ -30,7 +30,6 @@ DISABLE_UPDATE_PROMPT=false
 UPDATE_ZSH_DAYS=7
 
 # Completion settings
-ENABLE_CORRECTION="true"
 COMPLETION_WAITING_DOTS="true"
 
 # History settings
