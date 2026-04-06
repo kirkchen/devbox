@@ -120,7 +120,10 @@ WTI
         gi_additions+=("$pattern")
     done
     if [ ${#gi_additions[@]} -gt 0 ]; then
-        printf '\n# Worktree isolation\n' >> .gitignore
+        if ! grep -qF '# Worktree isolation' .gitignore 2>/dev/null; then
+            [ -s .gitignore ] && printf '\n' >> .gitignore
+            printf '# Worktree isolation\n' >> .gitignore
+        fi
         printf '%s\n' "${gi_additions[@]}" >> .gitignore
         created+=(".gitignore (updated)")
     fi
