@@ -15,6 +15,7 @@ PROTECTED=(
   ".env.local"
   ".env.production"
   ".env.staging"
+  ".env.worktree"
   "secrets/"
   ".git/"
   "id_rsa"
