@@ -111,7 +111,21 @@ synced_fields=$(cat <<'SETTINGS_EOF'
   "defaultMode": "acceptEdits",
   "sandbox": {
     "enabled": true,
-    "permissions": "auto-allow"
+    "permissions": "auto-allow",
+    "filesystem": {
+      "allowWrite": [
+        "~/Library/pnpm",
+        "~/Library/Caches/pnpm"
+      ],
+      "denyRead": [
+        "~/.npmrc"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org"
+      ]
+    }
   },
   "permissions": {
     "allow": [
@@ -214,31 +228,18 @@ if command -v jq &>/dev/null; then
     # 2. Hooks (idempotent additions)
     # ============================================================
 
-    agent_state_cmd="~/.tmux/plugins/tmux-agent-indicator/scripts/agent-state.sh"
-    notify_cmd="~/.config/claude/hooks/notify-macos.sh"
     security_guard_cmd="~/.config/claude/hooks/security-guard.sh"
     protect_files_cmd="~/.config/claude/hooks/protect-files.sh"
 
-    # -- Agent indicator hooks (tmux state tracking) --
-    # Disabled: using cmux, tmux agent indicator not needed
-    # for pair in \
-    #     "UserPromptSubmit:${agent_state_cmd} --agent claude --state running" \
-    #     "Notification:${agent_state_cmd} --agent claude --state needs-input" \
-    #     "Stop:${agent_state_cmd} --agent claude --state done"; do
-    #     event="${pair%%:*}"
-    #     hook_cmd="${pair#*:}"
-    #     hook_json=$(jq -n --arg cmd "$hook_cmd" '{"type":"command","command":$cmd,"async":true}')
-    #     ensure_hook "$event" "$hook_cmd" "$hook_json"
-    # done
-
-    # -- macOS notifications (Darwin only) --
-    # Disabled: using cmux, desktop notifications not needed
-    # if [ "$(uname)" = "Darwin" ]; then
-    #     for event in Notification Stop; do
-    #         hook_json=$(jq -n --arg cmd "$notify_cmd" '{"type":"command","command":$cmd,"async":true}')
-    #         ensure_hook "$event" "$notify_cmd" "$hook_json"
-    #     done
-    # fi
+    # -- Remove deprecated hooks (agent indicator + macOS notifications) --
+    # These were disabled when switching to cmux
+    for event in Notification Stop UserPromptSubmit; do
+        if jq -e ".hooks.${event}" "$SETTINGS_FILE" &>/dev/null; then
+            jq "del(.hooks.${event})" "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+            mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+            echo "✓ Removed deprecated hook: ${event}"
+        fi
+    done
 
     # -- Security: PreToolUse hooks --
     sg_json=$(jq -n --arg cmd "$security_guard_cmd" '{"type":"command","command":$cmd}')
