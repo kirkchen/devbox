@@ -1,3 +1,6 @@
+# Font
+font-size = 22
+
 # Color
 theme = Monokai Pro
 window-colorspace = display-p3
