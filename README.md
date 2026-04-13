@@ -91,10 +91,12 @@ devbox/
 │   ├── dot_zshrc.tmpl       # Zsh configuration
 │   ├── dot_claude.json.tmpl # Claude Code MCP servers
 │   ├── dot_vimrc            # Vim configuration
-│   ├── private_dot_claude/  # Claude Code settings
-│   │   ├── settings.json.tmpl
-│   │   ├── settings.md      # Settings documentation
-│   │   └── CLAUDE.md.tmpl   # Development guidelines
+│   ├── claude-code/         # Claude Code global config
+│   │   ├── CLAUDE.md        # Development guidelines
+│   │   ├── commands/        # Custom slash commands
+│   │   └── rules/           # Modular rules (security, etc.)
+│   ├── dot_local/bin/       # Scripts deployed to ~/.local/bin
+│   │   └── claude-friction  # Transcript friction analyzer
 │   └── private_dot_config/
 │       ├── lazygit/
 │       │   └── config.yml   # Lazygit config (delta pager)
@@ -211,10 +213,11 @@ gps / gpt / gpsh / gpo / gpl
 
 Pre-configured with:
 
-- **Status Line**: Shows `🌿 branch | model | directory`
-- **Plugins**: code-review, superpowers
+- **Plugins**: code-simplifier, superpowers, skill-creator
 - **Language**: Traditional Chinese (zh-TW)
-- **Security**: Blocks reading `.env*` and `secrets/` files
+- **Sandbox**: enabled with auto-allow, filesystem/network allowlists for pnpm/uv/OrbStack
+- **Hooks**: `security-guard` (blocks dangerous bash), `protect-files` (guards sensitive writes), PreCompact transcript backup
+- **Helpers**: `claude-friction <project>` — analyze transcripts for sandbox/permission friction
 - **MCP Servers**: sequential-thinking, context7, github (if token provided)
 
 ## Prebuilt Image
