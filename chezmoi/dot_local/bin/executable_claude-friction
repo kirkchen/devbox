@@ -1,0 +1,115 @@
+#!/bin/bash
+# claude-friction: analyze Claude Code transcripts for permission/sandbox friction
+#
+# Usage:
+#   claude-friction                    # list all projects with transcripts
+#   claude-friction <project-name>     # analyze specific project
+#   claude-friction <project-name> -v  # verbose, show sample commands
+#
+# Project name is the last segment of the repo dir, e.g. "beathub" for
+# ~/Code/Personal/beathub. Matches transcripts in
+# ~/.claude/projects/-<path>-to-<project>/
+
+set -euo pipefail
+
+PROJECTS_DIR="$HOME/.claude/projects"
+
+list_projects() {
+  echo "Projects with transcripts:"
+  for dir in "$PROJECTS_DIR"/*/; do
+    [ -d "$dir" ] || continue
+    name=$(basename "$dir")
+    count=$(find "$dir" -maxdepth 1 -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')
+    [ "$count" = "0" ] && continue
+    display=$(echo "$name" | sed 's|^-||; s|-|/|g')
+    printf "  %4s  %s\n" "$count" "$display"
+  done
+}
+
+find_project_dir() {
+  local query="$1"
+  local match
+  match=$(find "$PROJECTS_DIR" -maxdepth 1 -type d -name "*-${query}" 2>/dev/null | head -1)
+  if [ -z "$match" ]; then
+    echo "No transcripts found matching: $query" >&2
+    echo "Run without args to list available projects." >&2
+    exit 1
+  fi
+  echo "$match"
+}
+
+extract_tool_results() {
+  local dir="$1"
+  jq -r '
+    select(.type == "user") |
+    .message.content // [] |
+    if type == "array" then .[] else . end |
+    select(.type? == "tool_result") |
+    .content // empty |
+    if type == "array" then .[] | .text? // empty else tostring end
+  ' "$dir"/*.jsonl 2>/dev/null
+}
+
+analyze() {
+  local project="$1"
+  local verbose="${2:-0}"
+  local dir
+  dir=$(find_project_dir "$project")
+
+  local transcripts
+  transcripts=$(find "$dir" -maxdepth 1 -name '*.jsonl' | wc -l | tr -d ' ')
+
+  echo "=== Friction Report: $project ==="
+  echo "Transcripts: $transcripts"
+  echo "Location: $dir"
+  echo
+
+  local results
+  results=$(extract_tool_results "$dir")
+
+  echo "## 1. Permission denies (hook / settings)"
+  echo "$results" | grep -oE '<tool_use_error>[^<]+</tool_use_error>' \
+    | sort | uniq -c | sort -rn | head -5 | sed 's/^/  /'
+  echo
+
+  echo "## 2. Sandbox 'Operation not permitted'"
+  echo "$results" | grep -oE 'Operation not permitted[^"]{0,100}' \
+    | sed 's/\\n/ /g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+  echo
+
+  echo "## 3. 'permission denied' errors"
+  echo "$results" | grep -oiE 'permission denied[^"]{0,100}' \
+    | sed 's/\\n/ /g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+  echo
+
+  echo "## 4. security-guard pattern blocks"
+  echo "$results" | grep -oE 'Blocked: dangerous pattern[^"]*' \
+    | head -c 200 | sort | uniq -c | sort -rn | head -5 | sed 's/^/  /'
+  echo
+
+  echo "## 5. Top Bash commands (first word)"
+  jq -r '
+    select(.type == "assistant") |
+    .message.content // [] |
+    if type == "array" then .[] else . end |
+    select(.type? == "tool_use" and .name == "Bash") |
+    .input.command // empty
+  ' "$dir"/*.jsonl 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -vE '^(Co-Authored-By:|EOF|\)|-)' \
+    | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+
+  if [ "$verbose" = "1" ] || [ "$verbose" = "-v" ]; then
+    echo
+    echo "## 6. Sample blocked commands"
+    echo "$results" | grep -oE 'Blocked: [^"]{0,200}' \
+      | sort -u | head -10 | sed 's/^/  /'
+  fi
+}
+
+if [ $# -eq 0 ]; then
+  list_projects
+  exit 0
+fi
+
+analyze "$1" "${2:-0}"
