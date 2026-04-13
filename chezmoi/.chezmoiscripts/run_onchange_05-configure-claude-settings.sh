@@ -130,6 +130,9 @@ synced_fields=$(cat <<'SETTINGS_EOF'
         "registry.npmjs.org",
         "pypi.org",
         "files.pythonhosted.org"
+      ],
+      "allowUnixSockets": [
+        "~/.orbstack/run/docker.sock"
       ]
     }
   },
@@ -166,6 +169,10 @@ synced_fields=$(cat <<'SETTINGS_EOF'
 
       "Bash(python *)", "Bash(python3 *)", "Bash(node *)",
 
+      "Bash(pnpm install *)", "Bash(pnpm add *)", "Bash(pnpm dev *)",
+      "Bash(pnpm start *)", "Bash(pnpm test *)", "Bash(pnpm run *)",
+      "Bash(pnpm build *)", "Bash(pnpm lint *)",
+
       "Bash(kubectl get *)", "Bash(kubectl describe *)",
       "Bash(kubectl logs *)", "Bash(kubectl config *)",
       "Bash(kubectl top *)", "Bash(kubectl explain *)"
@@ -175,8 +182,7 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Bash(git push *)", "Bash(git merge *)", "Bash(git reset *)",
       "Bash(git revert *)", "Bash(git tag *)",
 
-      "Bash(pnpm install *)", "Bash(pnpm add *)", "Bash(pnpm remove *)",
-      "Bash(pnpm start *)", "Bash(pnpm dev *)", "Bash(pnpm exec *)",
+      "Bash(pnpm remove *)", "Bash(pnpm exec *)",
       "Bash(npm install *)",
 
       "Bash(curl *)", "Bash(wget *)",
@@ -191,7 +197,8 @@ synced_fields=$(cat <<'SETTINGS_EOF'
     ],
 
     "deny": [
-      "Read(.env*)",
+      "Read(.env)",
+      "Read(.env.production*)",
       "Read(**/secrets/**)",
       "Write(.env*)",
 
