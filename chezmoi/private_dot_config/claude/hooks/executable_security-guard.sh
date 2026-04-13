@@ -11,8 +11,9 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 [[ -z "$COMMAND" ]] && exit 0
 
 PATTERNS=(
-  'rm\s+-rf\s+/'
-  'rm\s+-rf\s+~'
+  'rm\s+-rf\s+/($|\s|\*|(usr|etc|bin|sbin|var|root|System|Library|Applications|opt|boot|dev|proc|sys|lib|lib64)([ /]|$))'
+  'rm\s+-rf\s+~($|[ /])'
+  'rm\s+-rf\s+\$HOME'
   'mkfs\.'
   'dd\s+if='
   'chmod\s+-R\s+777\s+/'
