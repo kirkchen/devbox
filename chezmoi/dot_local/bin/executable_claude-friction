@@ -1,5 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # claude-friction: analyze Claude Code transcripts for permission/sandbox friction
+# Requires bash 4+ (for reliable $() capture of large outputs).
 #
 # Usage:
 #   claude-friction                    # list all projects with transcripts
@@ -67,28 +68,35 @@ analyze() {
   local results
   results=$(extract_tool_results "$dir")
 
+  # Format a group of matches: count+sort, show "(none)" if empty
+  format_group() {
+    local input="$1"
+    if [ -z "$input" ]; then
+      echo "  (none)"
+    else
+      echo "$input" | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+    fi
+  }
+
   echo "## 1. Permission denies (hook / settings)"
-  echo "$results" | grep -oE '<tool_use_error>[^<]+</tool_use_error>' \
-    | sort | uniq -c | sort -rn | head -5 | sed 's/^/  /'
+  format_group "$(echo "$results" | grep -oE '<tool_use_error>[^<]+</tool_use_error>' || true)"
   echo
 
   echo "## 2. Sandbox 'Operation not permitted'"
-  echo "$results" | grep -oE 'Operation not permitted[^"]{0,100}' \
-    | sed 's/\\n/ /g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+  format_group "$(echo "$results" | grep -oE 'Operation not permitted[^"]{0,100}' | sed 's/\\n/ /g' || true)"
   echo
 
   echo "## 3. 'permission denied' errors"
-  echo "$results" | grep -oiE 'permission denied[^"]{0,100}' \
-    | sed 's/\\n/ /g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+  format_group "$(echo "$results" | grep -oiE 'permission denied[^"]{0,100}' | sed 's/\\n/ /g' || true)"
   echo
 
   echo "## 4. security-guard pattern blocks"
-  echo "$results" | grep -oE 'Blocked: dangerous pattern[^"]*' \
-    | head -c 200 | sort | uniq -c | sort -rn | head -5 | sed 's/^/  /'
+  format_group "$(echo "$results" | grep -oE 'Blocked: dangerous pattern[^"]{0,150}' || true)"
   echo
 
   echo "## 5. Top Bash commands (first word)"
-  jq -r '
+  local bash_commands
+  bash_commands=$(jq -r '
     select(.type == "assistant") |
     .message.content // [] |
     if type == "array" then .[] else . end |
@@ -96,14 +104,19 @@ analyze() {
     .input.command // empty
   ' "$dir"/*.jsonl 2>/dev/null \
     | awk '{print $1}' \
-    | grep -vE '^(Co-Authored-By:|EOF|\)|-)' \
-    | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+    | grep -vE '^(Co-Authored-By:|EOF|\)|-|$)' || true)
+  format_group "$bash_commands"
 
   if [ "$verbose" = "1" ] || [ "$verbose" = "-v" ]; then
     echo
     echo "## 6. Sample blocked commands"
-    echo "$results" | grep -oE 'Blocked: [^"]{0,200}' \
-      | sort -u | head -10 | sed 's/^/  /'
+    local blocked
+    blocked=$(echo "$results" | grep -oE 'Blocked: [^"]{0,200}' | sort -u | head -10 | sed 's/^/  /' || true)
+    if [ -z "$blocked" ]; then
+      echo "  (none)"
+    else
+      echo "$blocked"
+    fi
   fi
 }
 
