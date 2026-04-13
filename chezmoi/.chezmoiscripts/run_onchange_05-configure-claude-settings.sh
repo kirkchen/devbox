@@ -115,7 +115,11 @@ synced_fields=$(cat <<'SETTINGS_EOF'
     "filesystem": {
       "allowWrite": [
         "~/Library/pnpm",
-        "~/Library/Caches/pnpm"
+        "~/Library/Caches/pnpm",
+        "~/.cache/uv",
+        "~/.local/share/uv",
+        "~/.local/bin",
+        "~/.config/uv"
       ],
       "denyRead": [
         "~/.npmrc"
@@ -123,7 +127,9 @@ synced_fields=$(cat <<'SETTINGS_EOF'
     },
     "network": {
       "allowedDomains": [
-        "registry.npmjs.org"
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org"
       ]
     }
   },
