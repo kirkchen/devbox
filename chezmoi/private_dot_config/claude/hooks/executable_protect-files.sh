@@ -10,6 +10,11 @@ FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // empty
 
 [[ -z "$FILE" ]] && exit 0
 
+# Allow template/example files (e.g. .env.example) — they don't contain real secrets
+case "$(basename "$FILE")" in
+  *.example|*.sample|*.template) exit 0 ;;
+esac
+
 PROTECTED=(
   ".env"
   ".env.local"
