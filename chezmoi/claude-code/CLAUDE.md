@@ -6,6 +6,13 @@
 - Use conventional commits format: `type(scope): description`
 - Make small, incremental commits — one logical change per commit.
 
+## Anti-shortcut & calibration
+
+- Diagnose before fixing. Name the root cause + cite the source line before any fix.
+- Don't estimate time. Report size instead: files touched, lines changed, tests added.
+- Before claiming done / fixed / passing, list 3 ways it could still be broken and verify each.
+- Don't skip a check because it's "probably fine". Run it.
+
 ## Reader-facing output
 
 **Scope**: 最終跟人互動的輸出 — code review、MR / PR descriptions、comments、docs、final task summary（呈現給 user 看的結尾）。
