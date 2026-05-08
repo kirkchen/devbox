@@ -108,10 +108,8 @@ ensure_prompt_hook() {
 
 synced_fields=$(cat <<'SETTINGS_EOF'
 {
-  "defaultMode": "acceptEdits",
   "sandbox": {
     "enabled": true,
-    "permissions": "auto-allow",
     "filesystem": {
       "allowWrite": [
         "~/Library/pnpm",
@@ -119,18 +117,34 @@ synced_fields=$(cat <<'SETTINGS_EOF'
         "~/.cache/uv",
         "~/.local/share/uv",
         "~/.local/bin",
-        "~/.config/uv"
+        "~/.config/uv",
+        "~/.cache/pre-commit"
       ],
       "denyRead": [
-        "~/.npmrc"
+        "~/.npmrc",
+        "~/.ssh/**",
+        "~/.aws/**",
+        "~/.kube/**",
+        "~/.config/gh/**",
+        "~/.config/glab-cli/**",
+        "**/.env",
+        "**/.env.local",
+        "**/.env.production",
+        "**/.env.staging",
+        "**/secrets/**"
       ]
     },
     "network": {
       "allowedDomains": [
         "registry.npmjs.org",
         "pypi.org",
-        "files.pythonhosted.org"
+        "files.pythonhosted.org",
+        "api.github.com",
+        "*.githubusercontent.com",
+        "uploads.github.com",
+        "gitlab.jkopay.app"
       ],
+      "allowMachLookup": ["com.apple.trustd.agent"],
       "allowUnixSockets": [
         "~/.orbstack/run/docker.sock"
       ]
@@ -155,7 +169,7 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Bash(git cherry-pick *)", "Bash(git worktree *)",
       "Bash(git show *)", "Bash(git blame *)", "Bash(git rev-parse *)",
 
-      "Bash(ls *)", "Bash(cat *)", "Bash(head *)", "Bash(tail *)",
+      "Bash(ls *)",
       "Bash(find *)", "Bash(grep *)", "Bash(rg *)", "Bash(fd *)",
       "Bash(wc *)", "Bash(sort *)", "Bash(uniq *)", "Bash(diff *)",
       "Bash(echo *)", "Bash(printf *)", "Bash(jq *)", "Bash(yq *)",
