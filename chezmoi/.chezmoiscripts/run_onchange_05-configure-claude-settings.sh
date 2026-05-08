@@ -148,7 +148,8 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "allowUnixSockets": [
         "~/.orbstack/run/docker.sock"
       ]
-    }
+    },
+    "excludedCommands": ["kubectl"]
   },
   "permissions": {
     "allow": [
