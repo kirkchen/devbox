@@ -121,7 +121,6 @@ synced_fields=$(cat <<'SETTINGS_EOF'
         "~/.cache/pre-commit"
       ],
       "denyRead": [
-        "~/.npmrc",
         "~/.ssh/**",
         "~/.aws/**",
         "~/.kube/**",
