@@ -108,7 +108,9 @@ ensure_prompt_hook() {
 # ============================================================
 
 # Auto mode: the classifier auto-approves safe commands, so no big allow list.
-# allow  = only things the classifier can't pre-approve (MCP tools, known doc domains)
+# allow  = things the classifier can't pre-approve (MCP tools, known doc domains),
+#          plus git commit: local-only and reversible, and the dangerous variants
+#          (-a, --no-verify, add -A/.) are denied below; push still asks
 # ask    = forced confirmation for outward-facing / cluster-mutating actions
 # deny   = hard lines: credentials, secrets, destructive git, publish
 synced_fields=$(cat <<'SETTINGS_EOF'
@@ -124,11 +126,13 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:registry.npmjs.org)",
       "WebFetch(domain:nodejs.org)",
-      "WebFetch(domain:developer.mozilla.org)"
+      "WebFetch(domain:developer.mozilla.org)",
+
+      "Bash(git commit *)"
     ],
 
     "ask": [
-      "Bash(git commit *)", "Bash(git push *)",
+      "Bash(git push *)",
 
       "Bash(kubectl apply *)", "Bash(kubectl delete *)",
       "Bash(kubectl exec *)", "Bash(kubectl patch *)",
