@@ -1,7 +1,8 @@
 #!/bin/bash
 # Configure Claude Code settings, CLAUDE.md, and custom skills
 # This script:
-# 1. Merges base settings (defaultMode, sandbox, permissions) into ~/.claude/settings.json
+# 1. Merges base settings (permissions) into ~/.claude/settings.json, disables sandbox
+#    (auto mode classifier handles day-to-day approvals; deny rules + hooks are the hard lines)
 # 2. Ensures hooks are present (agent indicator, security, notifications, backup, prompt)
 # 3. Copies CLAUDE.md from chezmoi source to ~/.claude/CLAUDE.md
 # 4. Installs custom commands to ~/.claude/commands/
@@ -106,53 +107,16 @@ ensure_prompt_hook() {
 # 1. Base Settings (deep merge)
 # ============================================================
 
+# Auto mode: the classifier auto-approves safe commands, so no big allow list.
+# allow  = only things the classifier can't pre-approve (MCP tools, known doc domains)
+# ask    = forced confirmation for outward-facing / cluster-mutating actions
+# deny   = hard lines: credentials, secrets, destructive git, publish
 synced_fields=$(cat <<'SETTINGS_EOF'
 {
-  "sandbox": {
-    "enabled": true,
-    "filesystem": {
-      "allowWrite": [
-        "~/Library/pnpm",
-        "~/Library/Caches/pnpm",
-        "~/.cache/uv",
-        "~/.local/share/uv",
-        "~/.local/bin",
-        "~/.config/uv",
-        "~/.cache/pre-commit"
-      ],
-      "denyRead": [
-        "~/.ssh/**",
-        "~/.aws/**",
-        "~/.kube/**",
-        "~/.config/gh/**",
-        "~/.config/glab-cli/**",
-        "**/.env",
-        "**/.env.local",
-        "**/.env.production",
-        "**/.env.staging",
-        "**/secrets/**"
-      ]
-    },
-    "network": {
-      "allowedDomains": [
-        "registry.npmjs.org",
-        "pypi.org",
-        "files.pythonhosted.org",
-        "api.github.com",
-        "*.githubusercontent.com",
-        "uploads.github.com",
-        "gitlab.jkopay.app"
-      ],
-      "allowMachLookup": ["com.apple.trustd.agent"],
-      "allowUnixSockets": [
-        "~/.orbstack/run/docker.sock"
-      ]
-    },
-    "excludedCommands": ["kubectl"]
-  },
   "permissions": {
+    "defaultMode": "auto",
+
     "allow": [
-      "Glob", "Grep", "LS", "Task",
       "mcp__context7__resolve-library-id",
       "mcp__context7__query-docs",
       "mcp__sequential-thinking__sequentialthinking",
@@ -160,62 +124,34 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:registry.npmjs.org)",
       "WebFetch(domain:nodejs.org)",
-      "WebFetch(domain:developer.mozilla.org)",
-
-      "Bash(git status)", "Bash(git diff *)", "Bash(git log *)",
-      "Bash(git add *)", "Bash(git commit *)", "Bash(git checkout *)",
-      "Bash(git switch *)", "Bash(git stash *)", "Bash(git branch *)",
-      "Bash(git fetch *)", "Bash(git pull *)", "Bash(git rebase *)",
-      "Bash(git cherry-pick *)", "Bash(git worktree *)",
-      "Bash(git show *)", "Bash(git blame *)", "Bash(git rev-parse *)",
-
-      "Bash(ls *)",
-      "Bash(find *)", "Bash(grep *)", "Bash(rg *)", "Bash(fd *)",
-      "Bash(wc *)", "Bash(sort *)", "Bash(uniq *)", "Bash(diff *)",
-      "Bash(echo *)", "Bash(printf *)", "Bash(jq *)", "Bash(yq *)",
-      "Bash(tree *)", "Bash(which *)",
-      "Bash(basename *)", "Bash(dirname *)", "Bash(realpath *)",
-      "Bash(date *)", "Bash(uname *)", "Bash(whoami)", "Bash(pwd)", "Bash(id)",
-
-      "Bash(mkdir *)", "Bash(touch *)", "Bash(cp *)", "Bash(mv *)",
-      "Bash(sed *)", "Bash(awk *)", "Bash(cut *)", "Bash(tr *)",
-      "Bash(tee *)", "Bash(xargs *)", "Bash(chmod *)",
-
-      "Bash(python *)", "Bash(python3 *)", "Bash(node *)",
-
-      "Bash(pnpm install *)", "Bash(pnpm add *)", "Bash(pnpm dev *)",
-      "Bash(pnpm start *)", "Bash(pnpm test *)", "Bash(pnpm run *)",
-      "Bash(pnpm build *)", "Bash(pnpm lint *)",
-
-      "Bash(kubectl get *)", "Bash(kubectl describe *)",
-      "Bash(kubectl logs *)", "Bash(kubectl config *)",
-      "Bash(kubectl top *)", "Bash(kubectl explain *)"
+      "WebFetch(domain:developer.mozilla.org)"
     ],
 
     "ask": [
-      "Bash(git push *)", "Bash(git merge *)", "Bash(git reset *)",
-      "Bash(git revert *)", "Bash(git tag *)",
+      "Bash(git commit *)", "Bash(git push *)",
 
-      "Bash(pnpm remove *)", "Bash(pnpm exec *)",
-      "Bash(npm install *)",
-
-      "Bash(curl *)", "Bash(wget *)",
-      "Bash(docker *)", "Bash(helm *)",
-      "Bash(kubectl get secret*)", "Bash(kubectl describe secret*)",
       "Bash(kubectl apply *)", "Bash(kubectl delete *)",
-      "Bash(kubectl exec *)", "Bash(kubectl scale *)",
-      "Bash(kubectl rollout *)", "Bash(kubectl patch *)",
-      "Bash(kubectl edit *)", "Bash(kubectl create *)",
+      "Bash(kubectl exec *)", "Bash(kubectl patch *)",
+      "Bash(kubectl scale *)", "Bash(kubectl rollout *)",
+      "Bash(kubectl get secret*)", "Bash(kubectl describe secret*)",
 
-      "Bash(rm *)", "Bash(rmdir *)"
+      "Bash(helm install *)", "Bash(helm upgrade *)",
+      "Bash(helm uninstall *)", "Bash(helm rollback *)"
     ],
 
     "deny": [
-      "Read(.env)",
-      "Read(.env.production*)",
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.production*)",
+      "Read(**/.env.staging)",
       "Read(**/secrets/**)",
-      "Write(.env*)",
-
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.kube/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.config/glab-cli/**)",
+      "Write(**/.env*)",
+      "Edit(**/.env*)",
 
       "Bash(sudo *)", "Bash(sudo)",
       "Bash(git push --force *)", "Bash(git push -f *)",
@@ -250,6 +186,16 @@ if command -v jq &>/dev/null; then
         mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
         echo "✓ Updated $SETTINGS_FILE (merged base settings)"
     fi
+
+    # -- Sandbox: explicitly disabled --
+    # Network isolation prompts on every new domain per session and cannot be
+    # opened up, so the sandbox is off. File protection falls back to the
+    # permissions.deny Read rules above (cover ~/.ssh, ~/.aws, .env, ...) plus
+    # the protect-files / security-guard hooks. Overwrite (not merge) so legacy
+    # filesystem/network/excludedCommands keys are dropped.
+    jq '.sandbox = {"enabled": false}' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+    mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+    echo "✓ Sandbox disabled (auto mode classifier + deny rules + hooks)"
 
     # ============================================================
     # 2. Hooks (idempotent additions)
