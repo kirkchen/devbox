@@ -1,8 +1,9 @@
 #!/bin/bash
 # Configure Claude Code settings, CLAUDE.md, and custom skills
 # This script:
-# 1. Merges base settings (permissions) into ~/.claude/settings.json, disables sandbox
-#    (auto mode classifier handles day-to-day approvals; deny rules + hooks are the hard lines)
+# 1. Merges base settings (permissions, status line) into ~/.claude/settings.json,
+#    disables sandbox (auto mode classifier handles day-to-day approvals; deny rules
+#    + hooks are the hard lines)
 # 2. Ensures hooks are present (agent indicator, security, notifications, backup, prompt)
 # 3. Copies CLAUDE.md from chezmoi source to ~/.claude/CLAUDE.md
 # 4. Installs custom commands to ~/.claude/commands/
@@ -175,6 +176,11 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Bash(chmod -R 777 *)", "Bash(chmod -R 777)",
       "Bash(pnpm publish *)", "Bash(npm publish *)"
     ]
+  },
+
+  "statusLine": {
+    "type": "command",
+    "command": "~/.config/claude/statusline.sh"
   }
 }
 SETTINGS_EOF
