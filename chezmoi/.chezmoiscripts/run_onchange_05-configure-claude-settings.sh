@@ -159,7 +159,6 @@ synced_fields=$(cat <<'SETTINGS_EOF'
       "Read(~/.kube/**)",
       "Read(~/.config/gh/**)",
       "Read(~/.config/glab-cli/**)",
-      "Write(**/.env*)",
       "Edit(**/.env*)",
 
       "Bash(sudo *)", "Bash(sudo)",
