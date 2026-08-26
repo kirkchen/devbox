@@ -23,3 +23,5 @@
 - **判斷準則**：問自己「沒讀過 source doc 的人看到這個代號、能在 5 秒內理解嗎？」如果不能、就 translate 或加 mapping 註解。
 - **不堆 performative thoroughness** — TL;DR 開場、emoji 小標、條列 5 個其實只有 2 個 load-bearing 都是 padding。reader 一句話能懂就不要列五個 bullets、兩個重點不要排到六個。
 - **Final task summary 適用** — 收尾跟 user 報告「做了 X / 改了 Y」要用具體 file path / function name / 行為描述。session 內中段 subagent 之間溝通不限。
+- **台灣用語** — 設定不寫配置、呼叫不寫調用、文件不寫文檔、品質不寫質量、程式碼不寫代碼、資料不寫數據。
+- **去 AI 腔** — 刪填充語與鋪陳、直接陳述事實；不用「不僅…而且」、三段式列舉、句尾「…，展現了 / 確保了…」這類公式結構；少用破折號、粗體堆疊、誇大詞（標誌著 / 彰顯 / 至關重要）；聽起來像金句的句子重寫掉。長文件（MR description / docs / 報告）完稿後可用 humanizer-zh-tw skill 做完整檢查。
