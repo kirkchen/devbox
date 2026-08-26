@@ -1,7 +1,7 @@
 #!/bin/bash
 # Configure Claude Code settings, CLAUDE.md, and custom skills
 # This script:
-# 1. Merges base settings (permissions, status line) into ~/.claude/settings.json,
+# 1. Merges base settings (permissions, status line, output style) into ~/.claude/settings.json,
 #    disables sandbox (auto mode classifier handles day-to-day approvals; deny rules
 #    + hooks are the hard lines)
 # 2. Ensures hooks are present (agent indicator, security, notifications, backup, prompt)
@@ -108,6 +108,8 @@ ensure_prompt_hook() {
 # 1. Base Settings (deep merge)
 # ============================================================
 
+# outputStyle: built-in Concise style (v2.1.237+) — leads with the result,
+#              skips preamble, keeps responses short; work depth unchanged
 # Auto mode: the classifier auto-approves safe commands, so no big allow list.
 # allow  = things the classifier can't pre-approve (MCP tools, known doc domains),
 #          plus git commit: local-only and reversible, and the dangerous variants
@@ -116,6 +118,8 @@ ensure_prompt_hook() {
 # deny   = hard lines: credentials, secrets, destructive git, publish
 synced_fields=$(cat <<'SETTINGS_EOF'
 {
+  "outputStyle": "Concise",
+
   "permissions": {
     "defaultMode": "auto",
 
