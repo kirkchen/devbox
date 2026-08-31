@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Vault external token helper：依 VAULT_ADDR 的 host 分檔存放 token。
+#
+# Vault CLI 內建的 helper 固定寫 ~/.vault-token，不分是哪一座 vault，
+# 因此登入第二座會覆蓋第一座的 token。這支腳本改成一座一個檔，
+# 多座 vault 可以同時維運。
+#
+# Vault 會用 get / store / erase 三種參數呼叫它，store 從 stdin 讀 token。
+# 由 ~/.vault 的 token_helper 指定啟用。
+#
+# 注意：Terraform 的 vault provider 不支援 token helper（只讀 VAULT_TOKEN
+# 環境變數或 ~/.vault-token 檔），所以跑 terraform 要用 vault.zsh 的 tfv。
+
+set -euo pipefail
+
+dir="$HOME/.vault-tokens"
+umask 077
+mkdir -p "$dir"
+
+# 去掉 scheme，把 / 換成 _，保留 port 以免同 host 不同 port 撞檔
+host="$(printf '%s' "${VAULT_ADDR:-default}" | sed -E 's#^https?://##; s#/#_#g')"
+[ -n "$host" ] || host="default"
+file="$dir/$host"
+
+case "${1-}" in
+  get)
+    # 沒有 token 時要輸出空字串並正常結束，不能報錯
+    [ -f "$file" ] && cat "$file" || true
+    ;;
+  store)
+    cat > "$file"
+    ;;
+  erase)
+    rm -f "$file"
+    ;;
+  *)
+    echo "usage: $(basename "$0") {get|store|erase}" >&2
+    exit 1
+    ;;
+esac
