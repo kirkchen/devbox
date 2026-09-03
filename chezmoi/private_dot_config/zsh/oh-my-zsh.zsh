@@ -53,3 +53,16 @@ plugins=(
 
 # Source Oh-My-Zsh
 source $ZSH/oh-my-zsh.sh
+
+# Bullet Train's nvm prompt calls `nvm current`; defer it until NVM is needed.
+if (( $+functions[prompt_nvm] )) && (( ! $+functions[_DEVBOX_BULLETTRAIN_PROMPT_NVM] )); then
+  functions -c prompt_nvm _DEVBOX_BULLETTRAIN_PROMPT_NVM
+fi
+if (( $+functions[_DEVBOX_BULLETTRAIN_PROMPT_NVM] )); then
+  function prompt_nvm {
+    if [[ -n "${_DEVBOX_NVM_LAZY_SCRIPT:-}" && "${_NVM_LAZY_LOADED:-0}" == 0 ]]; then
+      return 0
+    fi
+    _DEVBOX_BULLETTRAIN_PROMPT_NVM "$@"
+  }
+fi
