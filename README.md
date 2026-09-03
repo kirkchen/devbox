@@ -180,6 +180,54 @@ The system automatically detects your environment (macOS, Linux, or DevContainer
 | `kctxi` | 互動式切換 Kubernetes context |
 | `knsi` | 互動式切換 Kubernetes namespace |
 
+#### Kubernetes Context Safety
+
+The shell uses `kube-ps1` to cache kubeconfig state instead of running `kubectl` for every prompt. The Bullet Train segment displays `environment | location/label | namespace` and applies the following exact context catalog:
+
+| Context | Environment | Location/label | Risk |
+|---------|-------------|----------------|------|
+| `gke_jkopay-operator_asia-east1_application` | operator | `gke/jkopay/application` | high |
+| `gke_jkopay-prod-app_asia-east1_application` | prod | `gke/jkopay/application` | high |
+| `gke_jkopay-sit-app_asia-east1_application` | sit | `gke/jkopay/application` | low |
+| `gke_jkopay-sit-service_asia-east1_application` | sit | `gke/jkopay/service` | low |
+| `gke_jkopay-uat-app_asia-east1_application` | uat | `gke/jkopay/application` | medium |
+| `gke_jkos-operator_asia-east1_application` | operator | `gke/jkos/application` | high |
+| `gke_jkos-prod-app_asia-east1_application` | prod | `gke/jkos/application` | high |
+| `gke_jkos-sit-app_asia-east1_application` | sit | `gke/jkos/application` | low |
+| `kirk@homelab` | prod | `personal/homelab` | high |
+| `kubernetes-admin@application-01` | sit/uat | `idc/application-01` | medium |
+| `kubernetes-super-admin@prod-jkopay` | prod | `idc/prod-jkopay` | critical |
+| `orbstack` | local | `local/orbstack` | low |
+
+Unlisted contexts fail into the high-risk `unknown` profile. Prompt colors and `kubectl` confirmation requirements are:
+
+| Risk | Environments | Prompt | `kubectl` policy |
+|------|--------------|--------|------------------|
+| low | SIT, OrbStack | green | Ordinary writes run; destructive and unknown commands require `y` confirmation |
+| medium | UAT, IDC SIT/UAT | yellow | Writes and unknown commands require `y`; destructive commands require typing `environment:namespace` |
+| high | PROD, operator, personal PROD, unknown | red `!` | Every non-read cluster command requires typing `environment:namespace` |
+| critical | IDC PROD super-admin | red `!` | Every non-read cluster command requires typing the complete context name |
+
+Read commands run without a risk confirmation, while local `kubectl config` commands run directly. `kubectx`, `kubens`, `kctxi`, and `knsi` remain available. For cluster commands, the wrapper blocks context, namespace, or `KUBECONFIG` source drift since the last prompt; refresh the prompt before retrying. After validation, implicit execution is pinned to that context and namespace.
+
+Explicit `--context`, `--namespace`, and `-n` targets are evaluated independently of the prompt's context and namespace snapshot, but they remain subject to its `KUBECONFIG` source snapshot and refresh requirement. They must appear before the `kubectl` verb:
+
+```bash
+kubectl --context=... -n foundation get pods
+```
+
+On guarded cluster commands, context or namespace target flags after the verb but before a recognized payload boundary, and empty explicit target values, fail closed. Enabled `-A` and `--all-namespaces` targets display and canonicalize as `all-namespaces`; when the policy calls for `environment:namespace` typed confirmation, enter `environment:all-namespaces`. Critical targets still require the complete context name.
+
+Ordinary target- and all-namespaces-like tokens after a recognized `exec`, `debug`, `run`, or `cp` `--` boundary remain opaque payload. Connection, credential, identity, and TLS override-shaped tokens are instead scanned across the complete argument list, including payload, and block conservatively; this can produce false positives. Local `kubectl config` commands still run directly. If the user has explicitly reviewed and accepts the risk in a false-positive case, `command kubectl` or a direct binary path is the deliberate escape hatch and bypasses the guard entirely.
+
+This wrapper protects against mistakes, not unauthorized access, and it does not cover `helm`, `k9s`, or `argocd`. RBAC is intentionally out of scope. Pod names containing `sit` or `uat` are not a security boundary because `kubernetes-admin@application-01` uses a shared IDC namespace.
+
+Verify the behavior with:
+
+```bash
+zsh -df tests/zsh/kubernetes_test.zsh
+```
+
 #### Tool Aliases
 
 | Alias | Description |

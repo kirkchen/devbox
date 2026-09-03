@@ -12,6 +12,9 @@ export ZSH="$HOME/.oh-my-zsh"
 # Load Oh-My-Zsh configuration
 [[ -f "$HOME/.config/zsh/oh-my-zsh.zsh" ]] && source "$HOME/.config/zsh/oh-my-zsh.zsh"
 
+# Load the risk-aware Kubernetes prompt and kubectl guard.
+[[ -f "$HOME/.config/zsh/kubernetes.zsh" ]] && source "$HOME/.config/zsh/kubernetes.zsh"
+
 # Load core tools configuration (fzf, direnv, z)
 [[ -f "$HOME/.config/zsh/core.zsh" ]] && source "$HOME/.config/zsh/core.zsh"
 
