@@ -103,7 +103,7 @@ devbox/
 │       ├── zsh/             # Modular Zsh configs
 │       │   ├── oh-my-zsh.zsh
 │       │   ├── core.zsh.tmpl
-│       │   ├── tools.zsh      # macOS: Homebrew, rbenv, NVM, pnpm
+│       │   ├── tools.zsh      # macOS: rbenv, lazy-loaded NVM, pnpm
 │       │   ├── functions.zsh  # Cross-platform: now(), fixup()
 │       │   ├── functions-macos.zsh # macOS: code()
 │       │   ├── aliases.zsh    # Git, K8s, tools aliases
