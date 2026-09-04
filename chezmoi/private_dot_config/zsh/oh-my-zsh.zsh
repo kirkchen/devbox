@@ -10,15 +10,12 @@ BULLETTRAIN_PROMPT_ORDER=(
   context
   dir
   git
-  kctx
+  kube
   nvm
   cmd_exec_time
 )
 BULLETTRAIN_NVM_SHOW=true
 BULLETTRAIN_GO_SHOW=true
-BULLETTRAIN_KCTX_KUBECTL=true
-BULLETTRAIN_KCTX_BG=magenta
-BULLETTRAIN_KCTX_FG=white
 BULLETTRAIN_EXEC_TIME_SHOW=true
 BULLETTRAIN_DIR_EXTENDED=2
 BULLETTRAIN_GIT_PROMPT_CMD=\$(git_prompt_info)
@@ -50,6 +47,11 @@ plugins=(
   sudo
   zsh-syntax-highlighting
 )
+
+# kube-ps1 caches kubeconfig changes, avoiding a kubectl subprocess on every prompt.
+if [[ -d "$ZSH/plugins/kube-ps1" ]] && (( ! ${plugins[(I)kube-ps1]} )); then
+  plugins+=(kube-ps1)
+fi
 
 # Source Oh-My-Zsh
 source $ZSH/oh-my-zsh.sh

@@ -1,6 +1,9 @@
 # Claude configuration
 .claude/
 
+# Local agent planning artifacts
+docs/superpowers/
+
 # Git worktrees
 .worktrees/
 

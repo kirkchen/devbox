@@ -1,0 +1,29 @@
+#!/bin/sh
+
+if [ "$1" = config ] && [ "$2" = current-context ]; then
+  if [ "${TEST_KUBE_CURRENT_CONTEXT+x}" = x ]; then
+    printf '%s\n' "$TEST_KUBE_CURRENT_CONTEXT"
+  else
+    printf '%s\n' 'gke_jkopay-sit-app_asia-east1_application'
+  fi
+elif [ "$1" = config ] && [ "$2" = view ]; then
+  if [ "${TEST_KUBE_NAMESPACE+x}" = x ]; then
+    printf '%s\n' "$TEST_KUBE_NAMESPACE"
+  else
+    printf '%s\n' default
+  fi
+  if [ -n "${TEST_KUBE_RACE_FILE:-}" ]; then
+    : > "$TEST_KUBE_RACE_FILE"
+  fi
+else
+  if [ -n "${TEST_KUBE_RACE_FILE:-}" ] && [ -f "$TEST_KUBE_RACE_FILE" ]; then
+    case " $* " in
+      *" --context=${TEST_KUBE_CURRENT_CONTEXT}"*" --namespace=${TEST_KUBE_NAMESPACE} "*) ;;
+      *)
+        printf 'RACE_UNPINNED:%s\n' "$*"
+        exit 42
+        ;;
+    esac
+  fi
+  printf 'EXEC:%s\n' "$*"
+fi
