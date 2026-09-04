@@ -88,6 +88,7 @@ devbox/
 │   │   ├── run_once_02-install-cli-tools.sh.tmpl
 │   │   └── run_once_04-install-claude-plugins.sh
 │   ├── dot_gitconfig.tmpl   # Git configuration
+│   ├── dot_vault.tmpl       # Vault token-helper configuration
 │   ├── dot_zshrc.tmpl       # Zsh configuration
 │   ├── dot_claude.json.tmpl # Claude Code MCP servers
 │   ├── dot_vimrc            # Vim configuration
@@ -96,7 +97,8 @@ devbox/
 │   │   ├── commands/        # Custom slash commands
 │   │   └── rules/           # Modular rules (security, etc.)
 │   ├── dot_local/bin/       # Scripts deployed to ~/.local/bin
-│   │   └── claude-friction  # Transcript friction analyzer
+│   │   ├── claude-friction  # Transcript friction analyzer
+│   │   └── vault-token-helper # Per-Vault token storage
 │   └── private_dot_config/
 │       ├── lazygit/
 │       │   └── config.yml   # Lazygit config (delta pager)
@@ -104,12 +106,18 @@ devbox/
 │       │   ├── oh-my-zsh.zsh
 │       │   ├── core.zsh.tmpl
 │       │   ├── tools.zsh      # macOS: rbenv, lazy-loaded NVM, pnpm
+│       │   ├── kubernetes.zsh # Context display and kubectl safety guard
+│       │   ├── vault.zsh      # Multi-instance Vault helpers
 │       │   ├── functions.zsh  # Cross-platform: now(), fixup()
 │       │   ├── functions-macos.zsh # macOS: code()
 │       │   ├── aliases.zsh    # Git, K8s, tools aliases
 │       │   └── gitpod.zsh     # Gitpod environment management
 │       └── raycast/
 │           └── scripts/       # macOS Raycast scripts
+├── tests/zsh/                # Zsh regression tests and kubectl fixture
+│   ├── nvm_lazy_load_test.zsh
+│   ├── kubernetes_test.zsh
+│   └── fixtures/kubectl
 └── install.sh               # Automated installation script
 ```
 
@@ -158,6 +166,18 @@ When you first run `chezmoi init` or `setup-dotfiles`, you'll be prompted for:
 
 The system automatically detects your environment (macOS, Linux, or DevContainer) and configures accordingly.
 
+### NVM Lazy Loading
+
+On macOS, NVM is deferred until a Node-related command is used. Opening a new shell does not source `nvm.sh`, and the Bullet Train prompt leaves the Node version hidden until NVM has loaded.
+
+The first use of `nvm`, `node`, `npm`, `npx`, `corepack`, `pnpm`, `yarn`, `yarnpkg`, or an executable installed under an NVM-managed Node version triggers initialization. That first command has a one-time delay; later Node commands in the same shell run normally.
+
+Verify the lazy-loading behavior with:
+
+```bash
+zsh tests/zsh/nvm_lazy_load_test.zsh
+```
+
 ### Shell Aliases
 
 #### Git Aliases (with comments)
@@ -180,9 +200,13 @@ The system automatically detects your environment (macOS, Linux, or DevContainer
 | `kctxi` | 互動式切換 Kubernetes context |
 | `knsi` | 互動式切換 Kubernetes namespace |
 
+These aliases require `kubectl`; their interactive selection also requires `fzf`. Separately installed `kubectx` and `kubens` commands remain available and are not replaced by the wrapper, but this repository does not install them.
+
 #### Kubernetes Context Safety
 
 The shell uses `kube-ps1` to cache kubeconfig state instead of running `kubectl` for every prompt. The Bullet Train segment displays `environment | location/label | namespace` and applies the following exact context catalog:
+
+The risk-aware prompt requires the `kube-ps1` plugin bundled with Oh My Zsh. The configuration enables it automatically when the plugin directory is present.
 
 | Context | Environment | Location/label | Risk |
 |---------|-------------|----------------|------|
@@ -227,6 +251,33 @@ Verify the behavior with:
 ```bash
 zsh -df tests/zsh/kubernetes_test.zsh
 ```
+
+#### Vault Multi-Instance Workflow
+
+`vault-use` selects which Vault instance the current shell targets. Each terminal tab keeps its own `VAULT_ADDR`, so JKOPay and JKOS can be operated at the same time without overwriting one another's token.
+
+```bash
+vault-use jkopay
+vault login -method=oidc
+
+vault-use jkos
+vault login -method=oidc
+
+vault-use        # Show the current target and login state
+```
+
+Vault CLI tokens are stored outside the repository under `~/.vault-tokens/`, one file per `VAULT_ADDR` host. Do not export `VAULT_TOKEN` globally because it takes precedence over the token helper and can become stale after a new login.
+
+Terraform's Vault provider does not use the CLI token helper. Run Terraform through `tfv` so the matching token is scoped to that command:
+
+```bash
+vault-use jkos
+cd /path/to/the/terraform/repository
+tfv plan
+tfv apply tfplan
+```
+
+The workflow uses the Vault CLI for login. `tfv` requires `terraform` and the 1Password CLI (`op`), and expects the Git repository root to contain the `.env` file used for Terraform state credentials.
 
 #### Tool Aliases
 
@@ -285,10 +336,29 @@ GitHub Actions automatically builds and publishes new images when:
 
 ## Updating Dotfiles
 
+### Test Zsh Changes
+
+Run the relevant regression tests before applying Zsh changes:
+
+```bash
+zsh tests/zsh/nvm_lazy_load_test.zsh
+zsh -df tests/zsh/kubernetes_test.zsh
+
+zsh -n chezmoi/private_dot_config/zsh/tools.zsh
+zsh -n chezmoi/private_dot_config/zsh/kubernetes.zsh
+zsh -n chezmoi/private_dot_config/zsh/oh-my-zsh.zsh
+zsh -n chezmoi/private_dot_config/zsh/vault.zsh
+bash -n chezmoi/dot_local/bin/executable_vault-token-helper
+git diff --check
+```
+
 ### Modify Templates
 
 1. Edit files in the `chezmoi/` directory
-2. Apply changes: `chezmoi apply --source="./chezmoi"`
+2. Run the relevant tests
+3. Preview changes: `chezmoi diff --source="./chezmoi"`
+4. Apply changes: `chezmoi apply --source="./chezmoi"`
+5. Open a new shell, or run `exec zsh`
 
 ### Add New Files
 
@@ -302,8 +372,12 @@ GitHub Actions automatically builds and publishes new images when:
 cd ~/Code/devbox
 git pull
 
-# Apply to current machine
+# Preview and apply to the current machine
+chezmoi diff --source="./chezmoi"
 chezmoi apply --source="./chezmoi"
+
+# Reload Zsh
+exec zsh
 ```
 
 ## Key Features
