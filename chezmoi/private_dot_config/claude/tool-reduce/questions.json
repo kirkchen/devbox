@@ -1,0 +1,14 @@
+{
+  "model": "jev-latest",
+  "_note": "Instructions are English: Jev's primary training language is English and CJK accuracy is lower. The `state` carries the tool output in its original language, which we cannot control.",
+  "questions": {
+    "noise": {
+      "type": "noul",
+      "instructions": "`chunks.{k}` repeats what other chunks already show, or is framing text carrying no fact of its own."
+    },
+    "uniq": {
+      "type": "noul",
+      "instructions": "`chunks.{k}` states a fact that appears in no other chunk."
+    }
+  }
+}
