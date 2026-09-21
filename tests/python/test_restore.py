@@ -73,6 +73,55 @@ class TestRestoreCli(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class TestLoadChunkRejectsInvalidUtf8(unittest.TestCase):
+    """task-7 fix-round 2：load_chunk 只信任 save_chunk 寫出來的內容
+    ——save_chunk 只從 Python str 寫檔，正常情況下輸出一定是合法 UTF-8。
+    唯一走得到這裡的路是有人直接竄改存放區底下的檔案塞進非法位元組。
+    查不到就是查不到，跟遺失／格式不對的 handle 是同一種失敗（回傳
+    None），不能讓 UnicodeDecodeError 逸出——那會在呼叫端（tr-restore）
+    印出帶內部路徑的完整 traceback，違反「錯誤訊息不能洩漏內部路徑／
+    stack trace」的規則。"""
+
+    def test_returns_none_for_undecodable_bytes(self):
+        root = tempfile.mkdtemp()
+        st = store.Store("sess-bad", root=root)
+        st._ensure(st.path)
+        # 直接寫非法 UTF-8 位元組，繞過只接受 str 的 save_chunk。
+        with open(os.path.join(st.path, "bad1.0.txt"), "wb") as fh:
+            fh.write(b"\xff\xfe not valid utf-8 \x80\x81")
+        self.assertIsNone(st.load_chunk("bad1.0"))
+
+
+class TestRestoreCliInvalidUtf8(unittest.TestCase):
+    """task-7 fix-round 2：tr-restore 對這種壞檔案要走它既有的乾淨失敗
+    路徑（stderr 印 "no such handle"、非零結束），不能印出 traceback 或
+    任何內部路徑片段。"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        st = store.Store("sess-bad", root=self.root)
+        st._ensure(st.path)
+        with open(os.path.join(st.path, "bad1.0.txt"), "wb") as fh:
+            fh.write(b"\xff\xfe not valid utf-8 \x80\x81")
+        self.env = dict(os.environ, TOOL_REDUCE_HOME=self.root,
+                        TOOL_REDUCE_SESSION="sess-bad",
+                        TOOL_REDUCE_LIB=os.path.join(
+                            BASE, "chezmoi/private_dot_config/claude/tool-reduce"))
+
+    def test_exits_nonzero_with_clean_stderr_no_traceback_no_internal_path(self):
+        r = subprocess.run([sys.executable, RESTORE, "bad1.0"],
+                           capture_output=True, text=True, env=self.env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("no such handle", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        # 内部原始碼路徑（例如 store.py 所在的絕對路徑）不該出現在錯誤
+        # 訊息裡——不只檢查沒有 "Traceback" 字樣，直接檢查這支模組自己的
+        # 絕對路徑片段是否洩漏出去。
+        self.assertNotIn(os.path.abspath(BASE), r.stderr)
+        self.assertNotIn("store.py", r.stderr)
+
+
 class TestGuard(unittest.TestCase):
     def test_detects_handle_in_bash_command(self):
         ev = {"tool_name": "Bash",

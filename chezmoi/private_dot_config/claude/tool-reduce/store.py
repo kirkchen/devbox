@@ -95,7 +95,13 @@ class Store:
         try:
             with open(p, encoding="utf-8") as fh:
                 return fh.read()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # save_chunk 只寫 Python str，正常情況下寫出來的一定是合法
+            # UTF-8；只有直接竄改存放區底下的檔案才會塞進非 UTF-8 位元組。
+            # 但呼叫端（tr-restore、tr-guard）都預期「查不到就回傳 None」
+            # 這個單一失敗形狀，不是讓 UnicodeDecodeError 逸出——那會在
+            # tr-restore 印出帶內部路徑的完整 traceback，違反「錯誤訊息
+            # 不能洩漏內部路徑／stack trace」的規則（task-7 fix-round 2）。
             return None
 
     def _append(self, name, rec):
