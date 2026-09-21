@@ -1,5 +1,5 @@
 # tests/python/test_hook_integration.py
-import sys, os, io, re, json, tempfile, importlib.util, unittest
+import sys, os, io, re, json, tempfile, time, importlib.util, unittest
 from unittest import mock
 
 BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -280,6 +280,45 @@ class TestIsRestoreCall(unittest.TestCase):
                 ev, asker=DROP_MIDDLE,
                 st=store.Store("sess-fp", root=tempfile.mkdtemp()))
             self.assertIsNotNone(out, f"expected filtering for command={command!r}")
+
+
+class TestIsRestoreCallBounded(unittest.TestCase):
+    """fix-round 3：`_reads_store_file` 對每個候選路徑都呼叫
+    `os.path.realpath`（一次系統呼叫），沒有上限。這段跑在每個過了 size
+    gate 的 tool result 前面、Jev 的 2.5s 預算之前 —— 量測：30,000 個
+    帶斜線 token、每個都真的做 realpath，要 12 秒，會讓整個 session 卡住。
+    套上三道防線（形狀過濾、解析次數封頂 32 次、掃描 blob 封頂 64 KB）
+    後歸零，見 `_reads_store_file` 的 docstring。"""
+
+    def test_large_edit_with_many_path_shaped_tokens_resolves_within_bound(self):
+        # 刻意用絕對路徑形狀（/aN/bN），確保 fix-round 3 加的形狀過濾器
+        # 不會直接把它們全部濾掉 —— 真正要測的是「realpath 呼叫次數有沒有
+        # 封頂」，不是「形狀過濾擋掉了幾個」（那件事 old_string/new_string
+        # 用一般程式碼片段就測得到，跟這裡的延遲測試是兩回事）。
+        old_string = " ".join(f"/a{i}/b{i}" for i in range(30000))
+        new_string = " ".join(f"/c{i}/d{i}" for i in range(30000))
+        ev = {"tool_name": "Edit", "tool_input": {
+            "file_path": "/Users/kirk/Code/devbox/somefile.py",
+            "old_string": old_string, "new_string": new_string}}
+        t0 = time.perf_counter()
+        result = hook.is_restore_call(ev)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        self.assertLess(
+            elapsed_ms, 100,
+            f"is_restore_call took {elapsed_ms:.1f} ms on a 30,000-token "
+            "Edit input, expected well under 100 ms")
+        # 這些 token 沒有一個真的指到存放區，形狀過濾器讓它們通過候選、
+        # 但解析後都不等於／不落在 _STORE_ROOT_REAL 底下。
+        self.assertFalse(result)
+
+    def test_exception_during_resolution_fails_safe_to_skip_filtering(self):
+        """is_restore_call 的 fail-safe：解析過程（expanduser／realpath）
+        只要丟例外就當作還原呼叫、整份放行不過濾 —— 誤放行頂多多送一次
+        未過濾的原始輸出，誤過濾則會把 agent 剛還原回來的內容再刪一次，
+        代價不對稱。用 mock 讓 os.path.realpath 直接丟例外來重現。"""
+        ev = {"tool_name": "Bash", "tool_input": {"command": "cat /some/path"}}
+        with mock.patch.object(os.path, "realpath", side_effect=OSError("boom")):
+            self.assertTrue(hook.is_restore_call(ev))
 
 
 class TestShadowMode(unittest.TestCase):

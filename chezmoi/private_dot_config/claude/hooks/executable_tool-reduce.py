@@ -37,6 +37,14 @@ MAX_CHUNKS = int(os.environ.get("TOOL_REDUCE_MAX_CHUNKS", "16"))
 _STORE_ROOT_REAL = os.path.realpath(os.path.expanduser(store.ROOT_DEFAULT))
 _STORE_ROOT_PREFIX = _STORE_ROOT_REAL + os.sep
 
+# _reads_store_file 的三道防線，見 fix-round 3：這段跑在每個過了 size
+# gate 的 tool result 前面、Jev 的 2.5s 預算之前，realpath 是系統呼叫，
+# 沒有上限的話一個帶大量像路徑片段的 Edit（例如 old_string/new_string
+# 裡有幾萬個帶斜線的片段）會讓整個 session 卡住好幾秒。量測：30,000 個
+# 帶斜線 token、每個都真的做 realpath，要 12 秒；套上這三道防線後歸零。
+_MAX_STORE_CHECK_BLOB_CHARS = 64 * 1024   # 掃描前先砍斷，切 token 這步本身就不會被巨大酬載拖慢
+_MAX_STORE_CHECK_TOKENS = 32              # 最多真的呼叫 realpath 幾次
+
 
 def _flatten_shell_tokens(text, _depth=0):
     """shlex.split 只切最外層的殼層語法。`sh -c '...'`／`bash -c "..."`
@@ -76,23 +84,46 @@ def _invokes_restore_cli(ev):
 
 
 def _path_tokens(blob):
-    """從 tool_input 的 JSON 字串裡挑出看起來像路徑的片段（含 `/`），
-    去掉包住它的引號跟常見 JSON 標點。不管是哪個工具、欄位名稱叫什麼都
-    適用（Bash 的 command、Read 的 file_path、其他工具的任何欄位），
-    不用為每個工具的 tool_input 形狀各寫一條特例。"""
+    """從 tool_input 的 JSON 字串裡挑出看起來像路徑的片段，去掉包住它的
+    引號跟常見 JSON 標點。不管是哪個工具、欄位名稱叫什麼都適用（Bash 的
+    command、Read 的 file_path、其他工具的任何欄位），不用為每個工具的
+    tool_input 形狀各寫一條特例。
+
+    只認「開頭長得像路徑」的 token（`/`、`~/`、`./`、`../`），不是任何
+    含 `/` 的片段都算 —— 存放區根目錄本身是絕對路徑，一個真的指到存放區
+    的還原呼叫一定會用絕對路徑或 `~` 開頭的路徑，不可能是日期
+    （`2024/01/15`）、分數（`3/4`）或程式碼片段裡的 `a/b` 這種寫法（見
+    fix-round 3：舊版只看「含不含 `/`」，這些統統會被當成路徑候選，白白
+    浪費一次 realpath 呼叫）。"""
     for raw in blob.split():
         tok = raw.strip("\"',{}[]:;")
-        if "/" in tok:
+        if tok.startswith(("/", "~/", "./", "../")):
             yield tok
 
 
 def _reads_store_file(ev):
-    """把 tool_input 裡任何長得像路徑的片段都展開、正規化（expanduser +
+    """把 tool_input 裡看起來像路徑的片段展開、正規化（expanduser +
     realpath），測是不是等於或落在 session 存放區底下 —— 跟
     store.load_chunk 驗證 handle 同一招，天生就處理得了 `..`、結尾斜線、
-    symlink（realpath 對不存在的路徑一樣會正規化，不需要檔案真的存在）。"""
-    blob = json.dumps(ev.get("tool_input") or {}, ensure_ascii=False)
-    for tok in _path_tokens(blob):
+    symlink（realpath 對不存在的路徑一樣會正規化，不需要檔案真的存在）。
+
+    三道防線界住成本（見 fix-round 3，量測見模組開頭常數旁的註解）：
+    先把要掃描的 blob 砍到 _MAX_STORE_CHECK_BLOB_CHARS，讓切 token 這步
+    本身不會被巨大酬載（例如帶超大 old_string/new_string 的 Edit）拖慢；
+    候選路徑用 _path_tokens 先做形狀過濾；真正呼叫 realpath（syscall）
+    的次數封頂在 _MAX_STORE_CHECK_TOKENS，一比對到就立刻回傳，不用等
+    掃完。
+
+    取捨：如果存放區路徑出現在被砍斷的 blob 之後、或第 32 個以後的候選
+    路徑，這次呼叫會被漏掉，內容可能被再過濾一次。可接受，因為墓碑標記
+    要 agent 打的是 `tr-restore <handle>`，走 _invokes_restore_cli 那條
+    完全不碰檔案系統的路徑；真的直接 `cat` 存放區檔案的指令，路徑通常
+    就在指令最前面，遠遠排不到第 32 個。"""
+    blob = json.dumps(ev.get("tool_input") or {},
+                      ensure_ascii=False)[:_MAX_STORE_CHECK_BLOB_CHARS]
+    for i, tok in enumerate(_path_tokens(blob)):
+        if i >= _MAX_STORE_CHECK_TOKENS:
+            break
         real = os.path.realpath(os.path.expanduser(tok))
         if real == _STORE_ROOT_REAL or real.startswith(_STORE_ROOT_PREFIX):
             return True
