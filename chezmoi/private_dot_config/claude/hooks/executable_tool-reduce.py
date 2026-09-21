@@ -11,7 +11,7 @@
 import hashlib
 import json
 import os
-import re
+import shlex
 import sys
 
 TR = os.path.expanduser(os.environ.get(
@@ -30,29 +30,88 @@ TIMEOUT = float(os.environ.get("TOOL_REDUCE_TIMEOUT", "2.5"))
 MAX_CHUNKS = int(os.environ.get("TOOL_REDUCE_MAX_CHUNKS", "16"))
 
 
-# 還原指令本身，當一個獨立字詞比對，不是任何子字串都算（否則
-# "echo tr-restored" 這種提都不算真的呼叫的字串也會誤判）。
-_RESTORE_CMD_RE = re.compile(r"\btr-restore\b")
+# Session 存放區根目錄的正規化絕對路徑。跟 store.load_chunk 驗證 handle
+# 用的是同一招（realpath + startswith 前綴），不是字串比對 —— 這樣才能
+# 正確處理 `..`、結尾斜線、symlink，不用為每種寫法各寫一條特例（見
+# fix-round 2：字串比對版本抓不到 `..` 正規化後落進存放區的路徑）。
+_STORE_ROOT_REAL = os.path.realpath(os.path.expanduser(store.ROOT_DEFAULT))
+_STORE_ROOT_PREFIX = _STORE_ROOT_REAL + os.sep
 
-# Session 存放區根目錄，兩種寫法都比對：字面上的 "~/..."（使用者在指令裡
-# 通常這樣打）與展開後的絕對路徑（某些工具已經把路徑解析過）。這個路徑
-# 跟原始碼目錄（~/.config/claude/tool-reduce、chezmoi/.../tool-reduce）
-# 完全不同，用它當前綴不會誤中提到原始碼路徑的指令。
-_STORE_ROOT_TOKENS = tuple(
-    root.rstrip("/") + "/"
-    for root in {store.ROOT_DEFAULT, os.path.abspath(os.path.expanduser(store.ROOT_DEFAULT))}
-)
+
+def _flatten_shell_tokens(text, _depth=0):
+    """shlex.split 只切最外層的殼層語法。`sh -c '...'`／`bash -c "..."`
+    這種寫法，裡面那個被單一引號包起來的字串本身還是一整條指令，
+    shlex.split 只會把它當成『一個 token』（保留內部空白），不會再往下切。
+    對每個切出來、自己還帶空白的 token 再遞迴切一次，才看得到真正呼叫的
+    是什麼程式；封頂三層，避免異常輸入（例如刻意塞一堆空白的字串）
+    造成無謂的遞迴。shlex.split 遇到括號不對稱的引號會丟 ValueError，
+    退回單純按空白切。"""
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        parts = text.split()
+    if _depth >= 3:
+        return parts
+    out = []
+    for p in parts:
+        if p != text and any(ch.isspace() for ch in p):
+            out.extend(_flatten_shell_tokens(p, _depth + 1))
+        else:
+            out.append(p)
+    return out
+
+
+def _invokes_restore_cli(ev):
+    """tr-restore 是不是以獨立殼層 token 的身分被呼叫（用 basename 比對
+    整個 token，不是子字串／不是 regex word-boundary —— `\\btr-restore\\b`
+    這種寫法在 `-` 兩側都算邊界，`tr-restore-helper` 跟
+    `my-tr-restore-notes.md` 都會誤判，見 fix-round 2）。涵蓋直接呼叫、
+    透過 `sh -c` 包一層、或帶完整路徑呼叫。"""
+    ti = ev.get("tool_input")
+    command = ti.get("command") if isinstance(ti, dict) else None
+    if not isinstance(command, str) or not command:
+        return False
+    return any(os.path.basename(t) == "tr-restore"
+               for t in _flatten_shell_tokens(command))
+
+
+def _path_tokens(blob):
+    """從 tool_input 的 JSON 字串裡挑出看起來像路徑的片段（含 `/`），
+    去掉包住它的引號跟常見 JSON 標點。不管是哪個工具、欄位名稱叫什麼都
+    適用（Bash 的 command、Read 的 file_path、其他工具的任何欄位），
+    不用為每個工具的 tool_input 形狀各寫一條特例。"""
+    for raw in blob.split():
+        tok = raw.strip("\"',{}[]:;")
+        if "/" in tok:
+            yield tok
+
+
+def _reads_store_file(ev):
+    """把 tool_input 裡任何長得像路徑的片段都展開、正規化（expanduser +
+    realpath），測是不是等於或落在 session 存放區底下 —— 跟
+    store.load_chunk 驗證 handle 同一招，天生就處理得了 `..`、結尾斜線、
+    symlink（realpath 對不存在的路徑一樣會正規化，不需要檔案真的存在）。"""
+    blob = json.dumps(ev.get("tool_input") or {}, ensure_ascii=False)
+    for tok in _path_tokens(blob):
+        real = os.path.realpath(os.path.expanduser(tok))
+        if real == _STORE_ROOT_REAL or real.startswith(_STORE_ROOT_PREFIX):
+            return True
+    return False
 
 
 def is_restore_call(ev):
     """還原讀進來的內容不能再被過濾，否則會繞圈。只比對兩種精確情況：
-    呼叫 tr-restore 還原指令本身，或直接讀 session 存放區底下的檔案 ——
-    不對整個 tool_input 做鬆散子字串比對（那樣連 `ls tool-reduce/` 這種
-    只是提到原始碼路徑的呼叫都會被誤判成還原呼叫，見 fix-round 1）。"""
-    blob = json.dumps(ev.get("tool_input") or {}, ensure_ascii=False)
-    if _RESTORE_CMD_RE.search(blob):
+    呼叫 tr-restore 還原指令本身（當獨立殼層 token），或任何工具的輸入裡
+    有路徑正規化後落在 session 存放區底下（含 Read 直接讀墓碑對應檔案）。
+    fail-safe：解析過程只要丟例外就當作還原呼叫、整份放行不過濾 ——
+    誤放行頂多多送一次未過濾的原始輸出，誤過濾則會把 agent 剛還原回來
+    的內容再刪一次，代價不對稱。"""
+    try:
+        if _invokes_restore_cli(ev):
+            return True
+        return _reads_store_file(ev)
+    except Exception:
         return True
-    return any(tok in blob for tok in _STORE_ROOT_TOKENS)
 
 
 def has_persisted_output(tool_response):

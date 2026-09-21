@@ -165,39 +165,110 @@ class TestRewrite(unittest.TestCase):
 
 
 class TestIsRestoreCall(unittest.TestCase):
-    """fix-round 1 Important 1：舊版對整個 tool_input 做鬆散子字串比對
-    （"tr-restore" in blob or "tool-reduce/" in blob），任何提到原始碼路徑
-    的指令都會被誤判成還原呼叫、整份放行不過濾。修正後只比對兩種精確
-    情況：tr-restore 指令本身（當獨立字詞），或直接讀 session 存放區
-    （~/.claude/tool-reduce，跟原始碼目錄是不同路徑）。"""
+    """fix-round 2：fix-round 1 換成的 `\\btr-restore\\b` regex 用「字詞邊界」
+    比對還原指令，但 `-` 在 regex 眼中是非字元，邊界兩側都成立 ——
+    `tr-restore-helper`、`my-tr-restore-notes.md` 都會被誤判成呼叫還原
+    指令。而存放區那一半換成前綴比對兩種固定寫法（原樣 "~/..." 跟展開後
+    的絕對路徑）的子字串比對，`..` 正規化後才會落進存放區的路徑（例如
+    `~/.claude/x/../tool-reduce/...`）完全比對不到，等於「還原的內容又
+    被再過濾一次」的回歸。
 
-    def _ev(self, command):
+    這一版換成解析而不是字串比對：
+    - tr-restore 呼叫比對 shlex 切出來的殼層 token 的 basename（涵蓋
+      `sh -c '...'` 這種巢狀殼層寫法，見 hook._flatten_shell_tokens）。
+    - 存放區讀取比對 os.path.realpath 正規化後的路徑是否等於或落在
+      存放區底下 —— 跟 store.load_chunk 驗證 handle 同一招，天生處理
+      得了 `..`、結尾斜線、symlink，且套用在任何工具的 tool_input 上
+      （不只 Bash，Read 直接讀墓碑檔案也要抓到）。
+
+    測試矩陣對應 fix-round 2 的 review 表格，一列一個測試方法。"""
+
+    def _bash(self, command):
         return {"tool_name": "Bash", "tool_input": {"command": command}}
 
-    def test_ls_of_source_dir_is_not_a_restore_call(self):
-        # 舊版誤判：只是列出原始碼目錄，不是還原呼叫。
+    # --- tr-restore CLI 呼叫：獨立殼層 token 才算 ---
+
+    def test_direct_tr_restore_invocation_is_a_restore_call(self):
+        self.assertTrue(hook.is_restore_call(self._bash("tr-restore a3f2.7")))
+
+    def test_tr_restore_via_sh_dash_c_is_a_restore_call(self):
+        # `sh -c '...'` 那個被引號包住的字串本身還是一整條指令；
+        # shlex.split 只切最外層，會把它當成一個（帶內部空白的）token，
+        # 要再切一層才看得到裡面真正呼叫的是 tr-restore。
+        self.assertTrue(hook.is_restore_call(
+            self._bash("sh -c 'tr-restore a3f2.7'")))
+
+    def test_tr_restore_with_full_path_is_a_restore_call(self):
+        self.assertTrue(hook.is_restore_call(
+            self._bash("/usr/local/bin/tr-restore a3f2.7")))
+
+    def test_tr_restore_helper_is_not_a_restore_call(self):
+        # regression guard：上一輪的 \btr-restore\b word-boundary 版本會
+        # 誤判這個 —— "-" 兩側都算邊界；basename 整詞比對不會。
         self.assertFalse(hook.is_restore_call(
-            self._ev("ls chezmoi/private_dot_config/claude/tool-reduce/")))
+            self._bash("/usr/bin/tr-restore-helper --list")))
 
-    def test_grep_of_source_dir_is_not_a_restore_call(self):
-        # 舊版誤判：只是在原始碼目錄裡 grep，不是還原呼叫。
-        self.assertFalse(hook.is_restore_call(self._ev(
-            "grep -rn noise chezmoi/private_dot_config/claude/tool-reduce/*.py")))
+    def test_filename_mentioning_tr_restore_is_not_a_restore_call(self):
+        # regression guard：同一個 word-boundary 問題的另一種寫法。
+        self.assertFalse(hook.is_restore_call(
+            self._bash("cat my-tr-restore-notes.md")))
 
-    def test_tr_restore_invocation_is_a_restore_call(self):
-        self.assertTrue(hook.is_restore_call(self._ev("tr-restore a3f2.7")))
+    # --- 直接讀 session 存放區底下的檔案 ---
 
     def test_cat_of_session_store_is_a_restore_call(self):
         self.assertTrue(hook.is_restore_call(
-            self._ev("cat ~/.claude/tool-reduce/sess/a3f2.7.txt")))
+            self._bash("cat ~/.claude/tool-reduce/s/a3f2.7.txt")))
 
-    def test_tr_restore_as_substring_of_another_word_is_not_a_restore_call(self):
-        # "獨立字詞" 的邊界測試：不是子字串就算數。
-        self.assertFalse(hook.is_restore_call(self._ev("echo tr-restored already")))
+    def test_cat_of_session_store_with_trailing_slash_is_a_restore_call(self):
+        self.assertTrue(hook.is_restore_call(
+            self._bash("cat ~/.claude/tool-reduce/s/a3f2.7.txt/")))
 
-    def test_reduce_payload_now_filters_the_previously_false_positive_commands(self):
-        """舊版的兩個誤判案例（ls/grep 原始碼目錄）過去會讓 reduce_payload
-        整份放行；修正後要真的走完整個過濾流程並產生輸出。"""
+    def test_dotdot_normalising_into_the_store_is_a_restore_call(self):
+        # regression：fix-round 1 的字串比對版本抓不到這個 —— `..` 正規化
+        # 前的字面文字裡沒有任何一段完整比對得到 "~/.claude/tool-reduce/"。
+        self.assertTrue(hook.is_restore_call(
+            self._bash("cat ~/.claude/x/../tool-reduce/s/a3f2.7.txt")))
+
+    def test_symlink_into_the_store_is_a_restore_call(self):
+        # realpath 天生會把 symlink 解到真正的目標，不用為 symlink 另外
+        # 寫特例。目標不需要真的存在，只有 symlink 本身要存在。
+        d = tempfile.mkdtemp()
+        link = os.path.join(d, "myslink")
+        target = os.path.expanduser("~/.claude/tool-reduce/sess-x/a1.1.txt")
+        os.symlink(target, link)
+        self.assertTrue(hook.is_restore_call(self._bash(f"cat {link}")))
+
+    def test_read_of_a_store_file_is_a_restore_call(self):
+        # 存放區檢查要套用在任何工具的輸入上，不只是 Bash —— Read 直接讀
+        # 墓碑對應的檔案也要被認出來，否則還原出來的內容原地又被濾掉。
+        ev = {"tool_name": "Read",
+              "tool_input": {"file_path": os.path.expanduser(
+                  "~/.claude/tool-reduce/s/a3f2.7.txt")}}
+        self.assertTrue(hook.is_restore_call(ev))
+
+    # --- 不該被誤判的案例：只是提到原始碼路徑，或完全無關 ---
+
+    def test_ls_of_repo_source_dir_is_not_a_restore_call(self):
+        self.assertFalse(hook.is_restore_call(
+            self._bash("ls chezmoi/private_dot_config/claude/tool-reduce/")))
+
+    def test_grep_of_repo_source_dir_is_not_a_restore_call(self):
+        self.assertFalse(hook.is_restore_call(self._bash(
+            "grep -rn x chezmoi/private_dot_config/claude/tool-reduce/*.py")))
+
+    def test_cat_of_deployed_source_dir_is_not_a_restore_call(self):
+        # 部署路徑 ~/.config/claude/tool-reduce 跟 session 存放區
+        # ~/.claude/tool-reduce 是不同路徑，不該互相誤判。
+        self.assertFalse(hook.is_restore_call(
+            self._bash("cat ~/.config/claude/tool-reduce/jev.py")))
+
+    def test_unrelated_command_is_not_a_restore_call(self):
+        self.assertFalse(hook.is_restore_call(self._bash("git log --stat -50")))
+
+    def test_reduce_payload_still_filters_the_source_path_mentions(self):
+        """兩個誤判案例（ls/grep 原始碼目錄）過去會讓 reduce_payload 整份
+        放行；這裡在 reduce_payload 這個層級再確認一次，不只是
+        is_restore_call 回傳對的布林值。"""
         for command in (
             "ls chezmoi/private_dot_config/claude/tool-reduce/",
             "grep -rn noise chezmoi/private_dot_config/claude/tool-reduce/*.py",
