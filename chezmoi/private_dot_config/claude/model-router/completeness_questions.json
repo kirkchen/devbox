@@ -1,0 +1,39 @@
+{
+  "model": "jev-latest",
+  "_note": "English instructions/criteria per Jev's training-language guidance. `state.request` and `state.output` carry their original language.",
+  "questions": {
+    "addressed_everything": {
+      "type": "noul",
+      "instructions": "`request` lists what had to be done and `output` is what the agent handed back. Does `output` cover every item `request` explicitly asked for?",
+      "criteria": {
+        "true": "Every item named in `request` has a corresponding response or result in `output`",
+        "false": "At least one item named in `request` is absent from `output`"
+      }
+    },
+    "signs_of_incompleteness": {
+      "type": "noul",
+      "instructions": "Does `output` show signs of stopping partway through?",
+      "criteria": {
+        "true": "Cut off mid-way, leaves TODOs, says it will do something next without doing it, or wraps up after handling only part of the work",
+        "false": "Content reaches a clear conclusion or delivered result"
+      }
+    },
+    "refused_or_blocked": {
+      "type": "noul",
+      "instructions": "Does `output` state that the agent could not proceed, was blocked, or needs more information?",
+      "criteria": {
+        "true": "Reports missing permissions, files it could not find, asks for clarification, or declares it cannot complete the work",
+        "false": "Delivers a result normally"
+      }
+    },
+    "output_depth": {
+      "type": "score",
+      "instructions": "How deep is `output` relative to what `request` asked for? Judge the substance of the work shown, not the length of the text.",
+      "criteria": [
+        "Restates the items in `request` or answers 'confirmed' without showing any actual verification",
+        "Performs real checks on the items in `request` with specific citations or evidence, staying within the stated scope",
+        "Goes beyond the items in `request` and surfaces a problem or risk that `request` did not name"
+      ]
+    }
+  }
+}
