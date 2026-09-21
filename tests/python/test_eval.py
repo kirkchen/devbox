@@ -379,5 +379,141 @@ class TestSessionArgumentRejectsTraversal(unittest.TestCase):
         self.assertEqual(json.loads(r.stdout)["decisions"], 1)
 
 
+class TestRecordsSkippedCount(unittest.TestCase):
+    """task-8 fix-round 2：容錯不能變成無聲——一份被截斷的封存區（
+    store._append 盡力而為的正常結果）算出來的總數要帶著『有東西被略過』
+    的信號，不是看起來一樣自信的 0。"""
+
+    def test_clean_input_reports_zero_skipped(self):
+        r = stats.rollup(DECISIONS, TOMBSTONES, RESTORES)
+        self.assertEqual(r["records_skipped"], 0)
+
+    def test_mixed_good_and_bad_records_counts_every_skip(self):
+        decisions = [
+            "oops",                                        # 不是 dict：+1
+            ["nested"],                                     # 不是 dict：+1
+            {"decision_id": "d1", "tool": "Bash",            # chunks 缺欄位：+1
+             "chars_before": 100},
+            {"decision_id": "d2", "tool": "Bash",            # chunks 型別不對：+1
+             "chars_before": 100, "chunks": "nope"},
+            {"decision_id": "d3", "tool": "Bash", "chars_before": 100,  # 正常
+             "chunks": [{"i": 0, "chars": 10, "dropped": True}]},
+        ]
+        tombstones = [
+            None,                                            # 不是 dict：+1
+            {"decision_id": "d3", "chars": 5},                # 缺 handle：+1
+            {"handle": "d3.1", "decision_id": "d3", "chars": 10,  # 正常
+             "descriptor": "xxxxx"},
+        ]
+        restores = [
+            42,                                               # 不是 dict：+1
+            {"handle": "d3.1", "via": "tr-restore"},          # 正常
+        ]
+        r = stats.rollup(decisions, tombstones, restores)
+        # 2（decisions 非 dict）+ 2（chunks 缺／型別不對）
+        # + 2（tombstones 非 dict／缺 handle）+ 1（restores 非 dict）= 7
+        self.assertEqual(r["records_skipped"], 7)
+        # 沒被略過的那幾筆算出來的數字要照常正確，不能被略過的紀錄拖累。
+        self.assertEqual(r["decisions"], 3)
+        self.assertEqual(r["gross_saved"], 10)
+        self.assertEqual(r["restored_chars"], 10)
+
+    def test_read_jsonl_without_counter_is_unchanged(self):
+        # skip_counter 是選擇性參數，沒帶的呼叫端（既有測試／呼叫）行為
+        # 必須跟 fix-round 2 之前完全一樣。
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "mixed.jsonl")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write('"oops"\n')
+                fh.write(json.dumps({"decision_id": "d1"}) + "\n")
+            self.assertEqual(stats.read_jsonl(p), [{"decision_id": "d1"}])
+
+    def test_read_jsonl_skip_counter_counts_unparsable_and_non_dict_lines(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "mixed.jsonl")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("not even json{\n")            # 解析失敗：+1
+                fh.write('"a string"\n')                 # 不是 dict：+1
+                fh.write("[1, 2]\n")                      # 不是 dict：+1
+                fh.write(json.dumps({"decision_id": "d1"}) + "\n")  # 正常
+            counter = [0]
+            out = stats.read_jsonl(p, counter)
+            self.assertEqual(out, [{"decision_id": "d1"}])
+            self.assertEqual(counter[0], 3)
+
+    def test_cli_json_always_includes_records_skipped_field(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        env = dict(os.environ, TOOL_REDUCE_HOME=home)
+        r = subprocess.run([sys.executable, STATS_PATH, "--json"],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(json.loads(r.stdout)["records_skipped"], 0)
+
+    def test_cli_human_readable_prints_nothing_extra_when_clean(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write(json.dumps({"decision_id": "d1", "tool": "Bash",
+                                "chars_before": 100, "chunks": []}) + "\n")
+        env = dict(os.environ, TOOL_REDUCE_HOME=home)
+        r = subprocess.run([sys.executable, STATS_PATH],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("略過", r.stdout)
+
+    def test_cli_human_readable_and_json_surface_skips_from_a_truncated_archive(self):
+        # 端對端：read_jsonl 那關（解析失敗的行）跟 rollup() 那關（收到
+        # 的 dict 形狀不對）的略過筆數要合併成同一個總數，兩邊沒有誰算
+        # 兩次、也沒有誰漏算。
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write("truncated garbage not json{\n")           # read 關：+1
+            fh.write(json.dumps({"decision_id": "d1", "tool": "Bash",
+                                "chars_before": 100,
+                                "chunks": [{"i": 0, "chars": 10,
+                                           "dropped": True}]}) + "\n")
+            fh.write(json.dumps({"decision_id": "d2", "tool": "Bash"}) + "\n")  # rollup 關（缺 chunks）：+1
+        env = dict(os.environ, TOOL_REDUCE_HOME=home)
+
+        r_json = subprocess.run([sys.executable, STATS_PATH, "--json"],
+                                capture_output=True, text=True, env=env)
+        self.assertEqual(r_json.returncode, 0)
+        payload = json.loads(r_json.stdout)
+        self.assertEqual(payload["records_skipped"], 2)
+        self.assertEqual(payload["gross_saved"], 10)
+
+        r_human = subprocess.run([sys.executable, STATS_PATH],
+                                 capture_output=True, text=True, env=env)
+        self.assertEqual(r_human.returncode, 0)
+        self.assertIn("2 筆紀錄格式不對", r_human.stdout)
+
+
+class TestNonStringDescriptorDoesNotCrash(unittest.TestCase):
+    """task-8 fix-round 2：tomb_cost 之前用 `t.get("descriptor") or ""`——
+    descriptor 是 123 這種非字串但仍是 truthy 的值時，`or` 不會被觸發，
+    直接對 123 呼叫 len() 丟 TypeError。非字串 descriptor 一律當成 0 成本。
+    """
+
+    def test_numeric_descriptor_contributes_zero_cost(self):
+        tombstones = [{"handle": "d1.1", "decision_id": "d1", "chars": 700,
+                      "descriptor": 123}]
+        r = stats.rollup(DECISIONS, tombstones, [])
+        self.assertEqual(r["tombstone_cost"], 0)
+
+    def test_mixed_string_and_non_string_descriptors(self):
+        tombstones = [{"handle": "d1.1", "decision_id": "d1", "chars": 700,
+                      "descriptor": "x" * 50},
+                     {"handle": "d1.2", "decision_id": "d1", "chars": 620,
+                      "descriptor": None},
+                     {"handle": "d2.1", "decision_id": "d2", "chars": 420,
+                      "descriptor": ["not", "a", "string"]}]
+        r = stats.rollup(DECISIONS, tombstones, [])
+        self.assertEqual(r["tombstone_cost"], 50)
+
+
 if __name__ == "__main__":
     unittest.main()

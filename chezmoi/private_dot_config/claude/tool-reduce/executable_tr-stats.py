@@ -38,12 +38,20 @@ import store
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def read_jsonl(path):
+def read_jsonl(path, skip_counter=None):
     """讀一份 jsonl，只收字典。每一行各自 try：解析失敗的行跳過，解析
     成功但不是 dict（例如整份紀錄檔被截斷成一行裸字串、一個數字、一個
     list，甚至合法的 JSON null）的行也跳過——rollup() 假設收到的都是
     dict，形狀檢查放在讀檔這一層做一次，呼叫端不用每個欄位存取都重新
-    驗證『這筆紀錄本身是不是字典』。"""
+    驗證『這筆紀錄本身是不是字典』。
+
+    skip_counter 沒帶的話行為完全不變（沿用既有呼叫端／測試）；帶了的話
+    是一個單一元素的 list（`[0]` 這種），每跳過一行（解析失敗、或解析
+    成功但不是 dict）就 +1——呼叫端（main()）用它累計「讀檔這一關」的
+    略過筆數，跟 rollup() 自己那關（收到已經是 dict、但欄位形狀不對的
+    紀錄）的略過筆數合併成一個總數，見 task-8 fix-round 2：
+    store._append 是盡力而為、半寫壞的紀錄檔是常態而非例外，這個計數要
+    讓使用者看得到，不是悄悄吞掉。"""
     if not os.path.exists(path):
         return []
     out = []
@@ -52,9 +60,13 @@ def read_jsonl(path):
             try:
                 rec = json.loads(line)
             except Exception:
+                if skip_counter is not None:
+                    skip_counter[0] += 1
                 continue
             if isinstance(rec, dict):
                 out.append(rec)
+            elif skip_counter is not None:
+                skip_counter[0] += 1
     return out
 
 
@@ -82,13 +94,56 @@ def _dropped_chars(d):
     return total
 
 
+def _descriptor_len(t):
+    """墓碑成本只認字串長度的 descriptor；型別不對（例如 123 這種數字）
+    當成 0 成本，不是讓 len() 對非字串丟 TypeError——跟其他欄位一樣，
+    形狀不對就退化成『這個貢獻不算』，不是讓整條 rollup 中斷（task-8
+    fix-round 2：這是 fix-round 1 補齊各種形狀防呆之後唯一還留著的一條
+    crash path）。"""
+    desc = t.get("descriptor")
+    return len(desc) if isinstance(desc, str) else 0
+
+
 def rollup(decisions, tombstones, restores):
     # 三份輸入各自過濾掉不是字典的紀錄——不管是呼叫端直接塞了字串／
     # list／None 進來，還是 read_jsonl 之前版本沒濾掉就傳進來的殘留。
-    decisions = [d for d in decisions if isinstance(d, dict)]
-    tombstones = [t for t in tombstones
-                  if isinstance(t, dict) and isinstance(t.get("handle"), str)]
-    restores = [r for r in restores if isinstance(r, dict)]
+    # 同時數有幾筆被濾掉：跟 read_jsonl 那關的計數（見 main()）合起來，
+    # 才是「這次統計實際上略過了多少筆紀錄」的完整數字——一份半寫壞的
+    # 封存區是 store._append 盡力而為設計下的常態，不是例外，這個數字
+    # 只驗證「沒有丟例外」還不夠，總得讓人看得到「有東西被略過」。
+    skipped = 0
+
+    valid_decisions = []
+    for d in decisions:
+        if isinstance(d, dict):
+            valid_decisions.append(d)
+        else:
+            skipped += 1
+    decisions = valid_decisions
+
+    valid_tombstones = []
+    for t in tombstones:
+        if isinstance(t, dict) and isinstance(t.get("handle"), str):
+            valid_tombstones.append(t)
+        else:
+            skipped += 1
+    tombstones = valid_tombstones
+
+    valid_restores = []
+    for r in restores:
+        if isinstance(r, dict):
+            valid_restores.append(r)
+        else:
+            skipped += 1
+    restores = valid_restores
+
+    # 決策紀錄本身是 dict（前面那關過了），但 "chunks" 缺欄位或型別不對
+    # ——這筆決策還是算進 r["decisions"]（它確實是一筆有效的決策紀錄），
+    # 但它對 gross_saved／by_tool／score_hist 的貢獻全部是 0，這件事一樣
+    # 要算進略過總數，不然一份「decisions.jsonl 每筆都在、但 chunks 那段
+    # 被截斷」的封存區會算出一個看似正常、其實是 0 的毛省，卻沒有任何
+    # 信號說發生了什麼事。
+    skipped += sum(1 for d in decisions if not isinstance(d.get("chunks"), list))
 
     tomb_by_handle = {t["handle"]: t for t in tombstones}
     decision_by_id = {d["decision_id"]: d for d in decisions
@@ -102,7 +157,7 @@ def rollup(decisions, tombstones, restores):
     restored = {r.get("handle") for r in restores if r.get("handle") in tomb_by_handle}
 
     gross = sum(_dropped_chars(d) for d in decisions)
-    tomb_cost = sum(len(t.get("descriptor") or "") for t in tombstones)
+    tomb_cost = sum(_descriptor_len(t) for t in tombstones)
     restored_chars = sum(_num(tomb_by_handle[h].get("chars")) for h in restored)
 
     # 一個 restore 指到的 decision_id 有可能查不到對應的 decision 紀錄
@@ -156,6 +211,7 @@ def rollup(decisions, tombstones, restores):
 
     return {
         "score_hist": hist,
+        "records_skipped": skipped,
         "decisions": len(decisions),
         "tombstones": len(tombstones),
         "restores": len(restores),
@@ -204,14 +260,24 @@ def main():
     if err:
         print(f"tr-stats: {err}", file=sys.stderr)
         return 1
-    r = rollup(read_jsonl(os.path.join(base, "decisions.jsonl")),
-               read_jsonl(os.path.join(base, "tombstones.jsonl")),
-               read_jsonl(os.path.join(base, "restores.jsonl")))
+    # 讀檔這一關的略過筆數（解析失敗的行、解析成功但不是 dict 的行）跟
+    # rollup() 自己那關（收到的 dict 形狀不對）的略過筆數合併成一個總數
+    # ——兩關各自算各自的，沒有誰算兩次：read_jsonl 只數「根本沒進
+    # rollup() 的那些行」，rollup() 只數「進去了、但形狀不合格被退回」
+    # 的那些紀錄。
+    read_skip = [0]
+    r = rollup(read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip),
+               read_jsonl(os.path.join(base, "tombstones.jsonl"), read_skip),
+               read_jsonl(os.path.join(base, "restores.jsonl"), read_skip))
+    r["records_skipped"] += read_skip[0]
     if a.json:
         print(json.dumps(r, ensure_ascii=False, indent=2))
         return 0
     ratio_str = f"{r['net_ratio']:.1%}" if r["net_ratio"] is not None else "N/A"
     print(f"決策 {r['decisions']} 筆、墓碑 {r['tombstones']} 個、還原 {r['restores']} 次\n")
+    if r["records_skipped"]:
+        print(f"  注意：{r['records_skipped']} 筆紀錄格式不對，已略過、"
+             f"未列入以下統計（可能是半寫壞的紀錄檔）\n")
     print(f"  毛省      {r['gross_saved']:>12,} 字元")
     print(f"  墓碑成本  {r['tombstone_cost']:>12,}")
     print(f"  還原拉回  {r['restored_chars']:>12,}")
