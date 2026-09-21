@@ -1,7 +1,7 @@
 import sys, os, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__),
                                 "../../chezmoi/private_dot_config/claude/tool-reduce"))
-import policy
+import drop_policy as policy
 
 
 def sc(*pairs):
@@ -61,6 +61,21 @@ class TestGuards(unittest.TestCase):
         self.assertFalse(policy.decide(s, [100] * 4)[1])
         t = dict(policy.DEFAULTS, noise_min=0.5)
         self.assertTrue(policy.decide(s, [100] * 4, t)[1])
+
+    def test_partial_threshold_dict_merges_onto_defaults(self):
+        """Passing partial threshold dict should merge, not raise KeyError."""
+        s = sc((0.2, 0.9), (0.55, 0.1), (0.2, 0.9), (0.2, 0.9))
+        t = {"noise_min": 0.5}  # Missing min_chunks, max_drop_ratio, uniq_max
+        d = policy.decide(s, [100] * 4, t)
+        self.assertTrue(d[1])  # Should use merged defaults for other keys
+
+    def test_non_dict_score_entry_is_never_dropped(self):
+        """Non-dict entry in scores should degrade to keep, not crash."""
+        s = [{"noise": 0.2, "uniq": 0.9}, "not a dict",
+             {"noise": 0.99, "uniq": 0.01}, {"noise": 0.2, "uniq": 0.9}]
+        d = policy.decide(s, [100] * 4)
+        self.assertFalse(d[1])  # Non-dict entry should be kept
+        self.assertTrue(d[2])  # Real dict with high noise should be dropped
 
 
 if __name__ == "__main__":

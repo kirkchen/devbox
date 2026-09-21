@@ -30,13 +30,19 @@ def load(path=None):
 
 def decide(scores, chunk_chars, t=None):
     """回傳與 scores 等長的布林清單，True 代表刪掉。"""
-    t = t or load()
+    if t is None:
+        t = load()
+    else:
+        t = dict(DEFAULTS, **t)
     n = len(scores)
     if n < t["min_chunks"] or n != len(chunk_chars):
         return [False] * n
 
     drop = []
     for i, s in enumerate(scores):
+        if not isinstance(s, dict):
+            drop.append(False)
+            continue
         noise, uniq = s.get("noise"), s.get("uniq")
         ok = (
             i != 0 and i != n - 1                       # 不刪頭尾
