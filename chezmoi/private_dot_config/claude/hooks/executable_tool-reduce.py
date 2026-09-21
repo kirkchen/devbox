@@ -30,12 +30,25 @@ TIMEOUT = float(os.environ.get("TOOL_REDUCE_TIMEOUT", "2.5"))
 MAX_CHUNKS = int(os.environ.get("TOOL_REDUCE_MAX_CHUNKS", "16"))
 
 
-# Session 存放區根目錄的正規化絕對路徑。跟 store.load_chunk 驗證 handle
-# 用的是同一招（realpath + startswith 前綴），不是字串比對 —— 這樣才能
-# 正確處理 `..`、結尾斜線、symlink，不用為每種寫法各寫一條特例（見
-# fix-round 2：字串比對版本抓不到 `..` 正規化後落進存放區的路徑）。
-_STORE_ROOT_REAL = os.path.realpath(os.path.expanduser(store.ROOT_DEFAULT))
-_STORE_ROOT_PREFIX = _STORE_ROOT_REAL + os.sep
+def _store_root_real():
+    """Session 存放區根目錄的正規化絕對路徑，每次呼叫都重算，不在模組
+    載入當下就凍結成常數。
+
+    跟 store.load_chunk 驗證 handle 用的是同一招（realpath +
+    startswith 前綴），不是字串比對 —— 這樣才能正確處理 `..`、結尾斜線、
+    symlink，不用為每種寫法各寫一條特例（見 fix-round 2：字串比對版本
+    抓不到 `..` 正規化後落進存放區的路徑）。
+
+    根目錄本身走 store.root()（TOOL_REDUCE_HOME 優先，否則
+    store.ROOT_DEFAULT），不是重新硬寫一份只認 ROOT_DEFAULT 的公式 ——
+    先前這裡直接寫死 store.ROOT_DEFAULT，完全沒看 TOOL_REDUCE_HOME，
+    設了這個環境變數會搬動 store.Store 實際落地的目錄、卻搬不動這裡的
+    比對基準，變成「存放區搬家了，這道還原偵測閘門沒跟著搬」（task-7
+    review 抓到）。改成每次呼叫都重新解析，才能跟 store.Store 每次建構
+    都重新讀一次環境變數的行為對齊 —— 凍結成模組層級常數的話，同一個
+    行程裡先讀早、後設 TOOL_REDUCE_HOME 的呼叫端（例如測試在 setUp 裡
+    設環境變數）一樣看不到新值。"""
+    return os.path.realpath(store.root())
 
 # _reads_store_file 的三道防線，見 fix-round 3：這段跑在每個過了 size
 # gate 的 tool result 前面、Jev 的 2.5s 預算之前，realpath 是系統呼叫，
@@ -119,13 +132,15 @@ def _reads_store_file(ev):
     要 agent 打的是 `tr-restore <handle>`，走 _invokes_restore_cli 那條
     完全不碰檔案系統的路徑；真的直接 `cat` 存放區檔案的指令，路徑通常
     就在指令最前面，遠遠排不到第 32 個。"""
+    store_root_real = _store_root_real()
+    store_root_prefix = store_root_real + os.sep
     blob = json.dumps(ev.get("tool_input") or {},
                       ensure_ascii=False)[:_MAX_STORE_CHECK_BLOB_CHARS]
     for i, tok in enumerate(_path_tokens(blob)):
         if i >= _MAX_STORE_CHECK_TOKENS:
             break
         real = os.path.realpath(os.path.expanduser(tok))
-        if real == _STORE_ROOT_REAL or real.startswith(_STORE_ROOT_PREFIX):
+        if real == store_root_real or real.startswith(store_root_prefix):
             return True
     return False
 

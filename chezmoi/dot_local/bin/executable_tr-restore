@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""還原一個被 tool-reduce 裁掉的段落，並記錄這次還原。
+
+墓碑標記裡的 handle 就是參數：tr-restore a3f2.7
+
+這次還原會被記進 restores.jsonl。那份遙測是 eval 的 ground truth ——
+「墓碑被還原」是即時的、無誤判的誤刪訊號，Task 9／10 的評估都建立在這份
+紀錄「每一次還原都被抓到」之上。
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.expanduser(os.environ.get(
+    "TOOL_REDUCE_LIB", "~/.config/claude/tool-reduce")))
+import store
+
+
+def session_id():
+    """決定去哪個 session 存放區找 handle。
+
+    TOOL_REDUCE_SESSION 沒設的話，退而求其次找存放區底下最新異動的
+    session 目錄。存放區根目錄一律走 store.root()（TOOL_REDUCE_HOME 優先，
+    否則 store.ROOT_DEFAULT）—— 跟 store.Store 自己在沒帶 root 參數時的
+    解析公式同一份，不是這裡另外重算一次；否則設了 TOOL_REDUCE_HOME 會
+    搬動 Store 實際讀寫的目錄，卻搬不動這裡在找的目錄，兩邊各看各的存放區。
+
+    archive/ 只存紀錄（decisions／tombstones／restores 三份 jsonl），從不
+    存墓碑原文，選到它去 load_chunk 一定撲空，所以明確排除，不能讓它被
+    「最新異動」選中 —— 尤其 archive/ 底下的 jsonl 每次 reduce 都會被
+    附加寫入，mtime 常常比任何一個 session 目錄都新。
+
+    存放區根目錄本身不存在時（全新環境、一次 reduce 都還沒發生過）
+    os.listdir 會丟 FileNotFoundError（OSError 的子類別）；當作「沒有
+    任何 session 可選」，回傳空字串，讓呼叫端的 load_chunk 自然找不到
+    handle、以非零結束，而不是讓例外逸出到頂層印出 traceback。
+    """
+    s = os.environ.get("TOOL_REDUCE_SESSION")
+    if s:
+        return s
+    root = store.root()
+    try:
+        dirs = [d for d in os.listdir(root)
+                if d != "archive" and os.path.isdir(os.path.join(root, d))]
+    except OSError:
+        return ""
+    if not dirs:
+        return ""
+    return max(dirs, key=lambda d: os.path.getmtime(os.path.join(root, d)))
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: tr-restore <handle>", file=sys.stderr)
+        return 2
+    handle = sys.argv[1]
+    # Handle 格式在碰任何檔案系統之前就先擋掉。session_id() 在沒設
+    # TOOL_REDUCE_SESSION 時會列存放區目錄，那跟這個 handle 本身合不合法
+    # 無關；但一個明顯不合法的 handle（例如路徑穿越 `../../etc/passwd`）
+    # 應該在做那件事、或建構 Store、或任何一次檔案系統存取之前就先被拒絕，
+    # 不必繞一圈才在 load_chunk 內部發現。store.HANDLE_RE 跟 store.Store
+    # 內部驗證用的是同一份 pattern，這裡不重寫一份。
+    if not store.HANDLE_RE.match(handle):
+        print(f"tr-restore: invalid handle: {handle}", file=sys.stderr)
+        return 1
+    st = store.Store(session_id(), root=store.root())
+    text = st.load_chunk(handle)
+    if text is None:
+        print(f"tr-restore: no such handle: {handle}", file=sys.stderr)
+        return 1
+    st.record_restore({"handle": handle, "via": "tr-restore"})
+    sys.stdout.write(text)
+    if not text.endswith("\n"):
+        sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

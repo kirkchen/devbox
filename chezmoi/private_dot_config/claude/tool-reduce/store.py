@@ -25,10 +25,43 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+def _resolve_root():
+    """存放區根目錄的單一算法：TOOL_REDUCE_HOME 優先，否則 ROOT_DEFAULT。
+    跟 Store.__init__ 沒帶 root 參數時用的算法完全一樣（下面 Store.__init__
+    直接呼叫這支，不是各自重算一遍）。
+
+    tr-restore、tr-guard 跟這個模組的 PostToolUse hook（見
+    ../hooks/executable_tool-reduce.py）過去各自用自己的一份公式決定存放區
+    根目錄在哪，其中 hook 那份甚至沒看 TOOL_REDUCE_HOME —— 設了這個環境
+    變數會搬動存放區、卻搬不動 hook 的比對基準。三邊現在都改呼叫這支，
+    公式只有一份。
+
+    刻意用 abspath 不用 realpath：Store 實際寫檔案／讀檔案走的就是這個值，
+    要是換成 realpath，在 root 本身是符號連結底下的路徑時（例如 macOS 的
+    tempfile.mkdtemp() 落在 /var/folders/...，而 /var 是指到 /private/var
+    的符號連結），這支函式算出來的目錄會跟 Store 實際建立的目錄岔開 ——
+    同一個 root 字串，abspath 後兩次呼叫得到同一個路徑，realpath 後可能
+    因為當下檔案系統狀態而得到不同路徑。只有需要判斷「某個路徑是否落在
+    存放區底下」的呼叫端（見 hook 的 _reads_store_file）才自己在這支的
+    回傳值外面再包一層 realpath，那是它們自己驗證邏輯的需求，不該滲進
+    這支公用的解析函式裡。
+    """
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get("TOOL_REDUCE_HOME", ROOT_DEFAULT)))
+
+
+# 公開名稱給 tr-restore／tr-guard／PostToolUse hook 呼叫：store.root()。
+# 定義成 _resolve_root 的別名而不是直接命名為 `root`，是因為 Store.__init__
+# 底下有一個同名的 `root` 參數 —— Python 沒有區塊作用域，函式本體裡
+# `root` 這個名字從進入函式那一刻起就固定指向參數，沒辦法在同一個函式體
+# 內又拿它呼叫模組層級同名的函式。
+root = _resolve_root
+
+
 class Store:
     def __init__(self, session_id, root=None):
-        self.root = os.path.abspath(os.path.expanduser(
-            root or os.environ.get("TOOL_REDUCE_HOME", ROOT_DEFAULT)))
+        self.root = (os.path.abspath(os.path.expanduser(root))
+                     if root else _resolve_root())
         self.path = os.path.join(self.root, session_id)
         self.archive = os.path.join(self.root, "archive")
 
