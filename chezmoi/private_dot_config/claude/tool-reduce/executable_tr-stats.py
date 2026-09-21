@@ -12,66 +12,148 @@ store.ROOT_DEFAULT），且是 main() 每次執行時才呼叫，不在模組載
 「走同一份公式」，但只算一次：同一個行程裡先讀早、後設
 TOOL_REDUCE_HOME 的呼叫端（例如測試在呼叫前才設環境變數）會看到舊值，
 這正是 task-7 review 抓到的那個 bug 的形狀。
-"""
+
+rollup() 吃的三份輸入都是「別人寫的紀錄檔」——store._append 是盡力而為，
+session 目錄跟封存區各自獨立寫、任一份失敗不影響另一份，也不保證
+atomic；半寫壞的 decisions.jsonl 配上完整的 tombstones.jsonl（或反過來）
+是這支最可能在真實環境撞到的形狀，偏偏又是最想看到數字的時候。所以
+每一筆紀錄、每一個欄位在被讀取前都先確認形狀，缺欄位、型別不對、甚至
+整筆紀錄本身不是 dict，都要退化成「這筆不算」而不是丟例外（task-8
+fix-round 1）。"""
 import argparse
 import collections
 import json
 import os
+import re
 import sys
 
 import store
 
+# session id 的字元集合刻意收緊：只認字母、數字、下底線、連字號，不含
+# `.` 或 `/`——擋掉 `--session ../../../../etc` 這種路徑穿越寫法，不需要
+# 先組出路徑再靠 containment 檢查善後。containment 檢查（見 main()）還是
+# 留著當第二道防線，跟 store.load_chunk／tr-guard 驗證 handle 同一招：
+# 光靠字元集合擋不住「session id 本身合法、但剛好是一個 symlink 指到
+# 存放區外面」這種形狀。
+SESSION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 def read_jsonl(path):
+    """讀一份 jsonl，只收字典。每一行各自 try：解析失敗的行跳過，解析
+    成功但不是 dict（例如整份紀錄檔被截斷成一行裸字串、一個數字、一個
+    list，甚至合法的 JSON null）的行也跳過——rollup() 假設收到的都是
+    dict，形狀檢查放在讀檔這一層做一次，呼叫端不用每個欄位存取都重新
+    驗證『這筆紀錄本身是不是字典』。"""
     if not os.path.exists(path):
         return []
     out = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             try:
-                out.append(json.loads(line))
+                rec = json.loads(line)
             except Exception:
                 continue
+            if isinstance(rec, dict):
+                out.append(rec)
     return out
 
 
+def _num(x, default=0):
+    """x 是不是一個能拿來加總的數字。True/False 也是 int 的子類別，但
+    這裡的欄位（chars、chars_before）語意上不會是布林值，isinstance 排除
+    bool 是防呆，不是預期會撞到。"""
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return x
+    return default
+
+
+def _chunks(d):
+    """d["chunks"] 存在且是 list 才回傳；缺欄位、型別不對（字典、字串、
+    數字）都當成沒有段落，不是丟例外。"""
+    c = d.get("chunks")
+    return c if isinstance(c, list) else []
+
+
+def _dropped_chars(d):
+    total = 0
+    for c in _chunks(d):
+        if isinstance(c, dict) and c.get("dropped"):
+            total += _num(c.get("chars"))
+    return total
+
+
 def rollup(decisions, tombstones, restores):
+    # 三份輸入各自過濾掉不是字典的紀錄——不管是呼叫端直接塞了字串／
+    # list／None 進來，還是 read_jsonl 之前版本沒濾掉就傳進來的殘留。
+    decisions = [d for d in decisions if isinstance(d, dict)]
+    tombstones = [t for t in tombstones
+                  if isinstance(t, dict) and isinstance(t.get("handle"), str)]
+    restores = [r for r in restores if isinstance(r, dict)]
+
     tomb_by_handle = {t["handle"]: t for t in tombstones}
+    decision_by_id = {d["decision_id"]: d for d in decisions
+                      if isinstance(d.get("decision_id"), str)}
+
     # 用集合去重複：一個 handle 不管被記了幾筆 restore（tr-restore 跟
     # direct-read 各記一次、或同一條路徑被記了兩次），對「這個墓碑被還原
-    # 過」這件事只算一次 —— restored_chars／restore_rate／
+    # 過」這件事只算一次——restored_chars／restore_rate／
     # results_with_restore 都建立在這個去重複過的集合上，才不會讓同一次
     # 還原的字元被拉回去扣兩次。
-    restored = {r["handle"] for r in restores if r.get("handle") in tomb_by_handle}
+    restored = {r.get("handle") for r in restores if r.get("handle") in tomb_by_handle}
 
-    gross = sum(c["chars"] for d in decisions for c in d["chunks"] if c["dropped"])
-    tomb_cost = sum(len(t.get("descriptor", "")) for t in tombstones)
-    restored_chars = sum(tomb_by_handle[h]["chars"] for h in restored)
+    gross = sum(_dropped_chars(d) for d in decisions)
+    tomb_cost = sum(len(t.get("descriptor") or "") for t in tombstones)
+    restored_chars = sum(_num(tomb_by_handle[h].get("chars")) for h in restored)
 
-    decisions_with_restore = {tomb_by_handle[h]["decision_id"] for h in restored}
+    # 一個 restore 指到的 decision_id 有可能查不到對應的 decision 紀錄
+    # （tombstone 那份還在、decisions.jsonl 那份沒寫成功或被截斷）——
+    # 孤兒還原仍然是一次確認的還原，restored_chars／restore_rate 已經
+    # 算過了；只有「這筆算進哪個 decision／哪個 tool」查不到對象，不能
+    # 因此讓整條 rollup 中斷（StopIteration），也不能讓它偷偷灌進
+    # results_with_restore 的分子（那裡只認真的存在於 decisions 裡的
+    # id，用集合交集擋，見下方）。
+    restored_decision_ids = {tomb_by_handle[h].get("decision_id") for h in restored}
+    decisions_with_restore = restored_decision_ids & set(decision_by_id.keys())
+
     by_tool = collections.defaultdict(
         lambda: {"n": 0, "gross_saved": 0, "restored": 0, "chars_before": 0})
     for d in decisions:
-        b = by_tool[d["tool"]]
+        tool = d.get("tool")
+        tool = tool if isinstance(tool, str) and tool else "unknown"
+        b = by_tool[tool]
         b["n"] += 1
-        b["chars_before"] += d.get("chars_before", 0)
-        b["gross_saved"] += sum(c["chars"] for c in d["chunks"] if c["dropped"])
+        b["chars_before"] += _num(d.get("chars_before"))
+        b["gross_saved"] += _dropped_chars(d)
     for h in restored:
-        b = by_tool[next(d["tool"] for d in decisions
-                         if d["decision_id"] == tomb_by_handle[h]["decision_id"])]
-        b["restored"] += 1
+        did = tomb_by_handle[h].get("decision_id")
+        d = decision_by_id.get(did)
+        tool = d.get("tool") if d else None
+        tool = tool if isinstance(tool, str) and tool else "unknown"
+        by_tool[tool]["restored"] += 1
 
     # noise 分數的十格直方圖。決策全擠在門檻邊緣，就代表門檻沒有鑑別力。
-    # 涵蓋每個「有算過分」的段落（不論最後被丟還是被留），缺分數的段落
-    # 直接跳過，不當成 0 分硬塞進第 0 格。
+    # 涵蓋每個「有算過分」的段落（不論最後被丟還是被留），缺分數
+    # （缺鍵、值是 None、或 scores 本身形狀不對）的段落直接跳過，不當成
+    # 0 分硬塞進第 0 格。
     hist = [0] * 10
     for d in decisions:
-        for c in d["chunks"]:
-            v = (c.get("scores") or {}).get("noise")
-            if isinstance(v, (int, float)):
+        for c in _chunks(d):
+            if not isinstance(c, dict):
+                continue
+            scores = c.get("scores")
+            v = scores.get("noise") if isinstance(scores, dict) else None
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 hist[min(9, max(0, int(v * 10)))] += 1
 
-    total_before = sum(d.get("chars_before", 0) for d in decisions) or 1
+    total_before = sum(_num(d.get("chars_before")) for d in decisions)
+    net_saved = gross - tomb_cost - restored_chars
+    # 分母全部欄位缺失或全是 0 時，比例本身沒有意義——印一個「用 1 頂替
+    # 分母」算出來的數字看起來像真的有算過，卻是灌水的百分比，比直接說
+    # 「算不出來」更容易誤導人（"a rollup that lies is worse than one
+    # that admits it cannot tell"）。None 交給呼叫端（CLI／--json）自己
+    # 決定要印「N/A」還是留白，rollup() 本身不編故事。
+    net_ratio = (net_saved / total_before) if total_before else None
+
     return {
         "score_hist": hist,
         "decisions": len(decisions),
@@ -80,13 +162,36 @@ def rollup(decisions, tombstones, restores):
         "gross_saved": gross,
         "tombstone_cost": tomb_cost,
         "restored_chars": restored_chars,
-        "net_saved": gross - tomb_cost - restored_chars,
-        "net_ratio": (gross - tomb_cost - restored_chars) / total_before,
+        "net_saved": net_saved,
+        "net_ratio": net_ratio,
         "restore_rate": (len(restored) / len(tombstones)) if tombstones else 0.0,
         "results_with_restore": (len(decisions_with_restore) / len(decisions))
                                 if decisions else 0.0,
         "by_tool": dict(by_tool),
     }
+
+
+def _resolve_base(home, session):
+    """--session 沒帶就是封存區；帶了就驗證這個 session id：字元集合先
+    擋掉 `../` 這種寫法本身，containment 檢查（跟 store.load_chunk、
+    tr-guard 驗證 handle 同一招）再擋一次「session id 本身合法、但解析
+    出來的路徑不落在存放區底下」的形狀（例如透過 symlink）。回傳
+    (base_path, error_message)；error_message 非 None 時 base_path 必為
+    None，呼叫端據此印錯誤、非零結束，不能悄悄退回封存區——一個打錯的
+    session 名字如果安靜地印出封存區全部的統計，會被誤讀成那個 session
+    真的沒有任何紀錄。"""
+    if session is None:
+        return os.path.join(home, "archive"), None
+    if not SESSION_RE.match(session):
+        return None, f"invalid session id: {session}"
+    candidate = os.path.join(home, session)
+    real_home = os.path.realpath(home)
+    real_candidate = os.path.realpath(candidate)
+    if real_candidate != real_home and not real_candidate.startswith(real_home + os.sep):
+        return None, f"invalid session id: {session}"
+    if not os.path.isdir(candidate):
+        return None, f"no such session: {session}"
+    return candidate, None
 
 
 def main():
@@ -95,18 +200,22 @@ def main():
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     home = store.root()
-    base = os.path.join(home, a.session) if a.session else os.path.join(home, "archive")
+    base, err = _resolve_base(home, a.session)
+    if err:
+        print(f"tr-stats: {err}", file=sys.stderr)
+        return 1
     r = rollup(read_jsonl(os.path.join(base, "decisions.jsonl")),
                read_jsonl(os.path.join(base, "tombstones.jsonl")),
                read_jsonl(os.path.join(base, "restores.jsonl")))
     if a.json:
         print(json.dumps(r, ensure_ascii=False, indent=2))
         return 0
+    ratio_str = f"{r['net_ratio']:.1%}" if r["net_ratio"] is not None else "N/A"
     print(f"決策 {r['decisions']} 筆、墓碑 {r['tombstones']} 個、還原 {r['restores']} 次\n")
     print(f"  毛省      {r['gross_saved']:>12,} 字元")
     print(f"  墓碑成本  {r['tombstone_cost']:>12,}")
     print(f"  還原拉回  {r['restored_chars']:>12,}")
-    print(f"  淨省      {r['net_saved']:>12,}  ({r['net_ratio']:.1%} of chars before)")
+    print(f"  淨省      {r['net_saved']:>12,}  ({ratio_str} of chars before)")
     print(f"\n  還原率            {r['restore_rate']:.1%}")
     print(f"  有還原的 result   {r['results_with_restore']:.1%}")
     print(f"\n  {'tool':<28}{'n':>6}{'毛省':>12}{'還原':>7}")

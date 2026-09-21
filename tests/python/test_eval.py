@@ -213,5 +213,171 @@ class TestFreshOrAbsentStoreDoesNotCrash(unittest.TestCase):
         self.assertEqual(payload["score_hist"], [0] * 10)
 
 
+class TestReadJsonlYieldsOnlyDicts(unittest.TestCase):
+    """task-8 fix-round 1，第一層防線：read_jsonl 之前只濾掉解析失敗的
+    行，任何解析成功但不是字典的 JSON 值（裸字串、list、數字、null）都
+    會被傳給 rollup()——store._append 是盡力而為、不保證 atomic，一份
+    被截斷的 jsonl 完全可能有一行只剩半截、或整份被別的程式蓋成一個
+    純數字，這些形狀要在讀檔這一層就濾掉，rollup() 才能放心假設收到的
+    都是字典。"""
+
+    def test_non_dict_lines_are_dropped(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "mixed.jsonl")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write('"just a string"\n')
+                fh.write('[1, 2, 3]\n')
+                fh.write('42\n')
+                fh.write('null\n')
+                fh.write('not even json{\n')
+                fh.write(json.dumps({"decision_id": "d1", "tool": "Bash"}) + "\n")
+            self.assertEqual(stats.read_jsonl(p),
+                             [{"decision_id": "d1", "tool": "Bash"}])
+
+
+class TestRollupToleratesMalformedRecords(unittest.TestCase):
+    """task-8 fix-round 1：八條被回報的 crash path，每條都各自對應一筆
+    測試，直接餵給 rollup() 而不是先過 read_jsonl——這樣就算未來
+    read_jsonl 的過濾邏輯改了，rollup() 本身對「收到形狀不對的紀錄」
+    這件事的容錯不會被這層濾網悄悄蓋過去、失去覆蓋。"""
+
+    def test_orphan_restore_with_missing_decision_does_not_crash(self):
+        # tombstone／restore 都存在，但那筆 decision 紀錄不見了（decisions
+        # .jsonl 沒寫成功、或這次只拿到 archive 的其中一份）。舊版在
+        # by_tool 的還原歸屬那段用 next(...) 沒給預設值，找不到就是
+        # StopIteration。
+        decisions = [{"decision_id": "other", "tool": "Bash",
+                     "chars_before": 100, "chunks": []}]
+        tombstones = [{"handle": "orphan.1", "decision_id": "ghost",
+                      "chars": 500, "descriptor": "d" * 10}]
+        restores = [{"handle": "orphan.1", "via": "tr-restore"}]
+        r = stats.rollup(decisions, tombstones, restores)
+        self.assertEqual(r["restored_chars"], 500)
+        self.assertEqual(r["by_tool"]["unknown"]["restored"], 1)
+        # 孤兒的 decision_id 不是 decisions 裡真的存在的那一個，不該
+        # 灌進 results_with_restore 的分子。
+        self.assertEqual(r["results_with_restore"], 0.0)
+
+    def test_decision_missing_chunks_key_does_not_crash(self):
+        decisions = [{"decision_id": "d1", "tool": "Bash", "chars_before": 100}]
+        r = stats.rollup(decisions, [], [])
+        self.assertEqual(r["gross_saved"], 0)
+        self.assertEqual(r["decisions"], 1)
+
+    def test_chunks_not_a_list_does_not_crash(self):
+        decisions = [{"decision_id": "d1", "tool": "Bash",
+                     "chars_before": 100, "chunks": "not-a-list"}]
+        r = stats.rollup(decisions, [], [])
+        self.assertEqual(r["gross_saved"], 0)
+
+    def test_decision_record_that_is_a_string_is_skipped(self):
+        good = {"decision_id": "d1", "tool": "Bash", "chars_before": 100,
+                "chunks": [{"i": 0, "chars": 10, "dropped": True}]}
+        r = stats.rollup(["oops", good], [], [])
+        self.assertEqual(r["decisions"], 1)
+        self.assertEqual(r["gross_saved"], 10)
+
+    def test_decision_record_that_is_a_list_is_skipped(self):
+        good = {"decision_id": "d1", "tool": "Bash", "chars_before": 100,
+                "chunks": [{"i": 0, "chars": 10, "dropped": True}]}
+        r = stats.rollup([["nested", "list"], good], [], [])
+        self.assertEqual(r["decisions"], 1)
+        self.assertEqual(r["gross_saved"], 10)
+
+    def test_tombstone_record_that_is_null_is_skipped(self):
+        good_tomb = {"handle": "d1.1", "decision_id": "d1", "chars": 700,
+                    "descriptor": "x" * 10}
+        r = stats.rollup(DECISIONS, [None, good_tomb], RESTORES)
+        self.assertEqual(r["tombstones"], 1)
+        self.assertEqual(r["restored_chars"], 700)
+
+    def test_restore_record_that_is_a_number_is_skipped(self):
+        r = stats.rollup(DECISIONS, TOMBSTONES,
+                         [42, {"handle": "d1.1", "via": "tr-restore"}])
+        self.assertEqual(r["restores"], 1)
+        self.assertEqual(r["restored_chars"], 700)
+
+    def test_every_record_missing_chars_before_does_not_crash(self):
+        # 欄位是 None（不是缺鍵）：.get(key, 0) 的預設值只在缺鍵時生效，
+        # 值本身是 None 一樣要被當成「沒有這個數字」，不能讓 None + 0
+        # 逸出 TypeError。
+        decisions = [{"decision_id": "d1", "tool": "Bash", "chars_before": None,
+                     "chunks": [{"i": 0, "chars": 50, "dropped": True}]},
+                    {"decision_id": "d2", "tool": "Bash",
+                     "chunks": [{"i": 0, "chars": 30, "dropped": True}]}]
+        r = stats.rollup(decisions, [], [])
+        self.assertEqual(r["gross_saved"], 80)
+        self.assertEqual(r["by_tool"]["Bash"]["chars_before"], 0)
+        self.assertIsNone(r["net_ratio"])
+
+
+class TestZeroDenominatorRatioIsUnavailable(unittest.TestCase):
+    """total_before 是 0（沒有任何一筆紀錄帶 chars_before，或全部都是 0）
+    時，net_ratio 要回報成「算不出來」（None），不是拿 1 頂替分母印出一個
+    看起來很精確、其實是灌水的百分比。"""
+
+    def test_empty_input_ratio_is_none(self):
+        r = stats.rollup([], [], [])
+        self.assertIsNone(r["net_ratio"])
+        self.assertEqual(r["net_saved"], 0)
+
+    def test_nonzero_savings_with_zero_denominator_ratio_is_none(self):
+        decisions = [{"decision_id": "d1", "tool": "Bash",
+                     "chunks": [{"i": 0, "chars": 500, "dropped": True}]}]
+        r = stats.rollup(decisions, [], [])
+        self.assertEqual(r["gross_saved"], 500)
+        self.assertIsNone(r["net_ratio"])
+
+
+class TestSessionArgumentRejectsTraversal(unittest.TestCase):
+    """--session 直接跟存放區根目錄 os.path.join，舊版完全沒驗證就拿去
+    讀檔——`--session ../../../../etc` 會被正規化到存放區外面，讀出
+    存放區以外的內容還 exit 0。字元集合先擋掉 `.`／`/`，containment
+    檢查再擋 symlink 這種字元集合擋不住的形狀（跟 store.load_chunk、
+    tr-guard 驗證 handle 同一招）。"""
+
+    def _run(self, home, *extra_args):
+        env = dict(os.environ, TOOL_REDUCE_HOME=home)
+        return subprocess.run([sys.executable, STATS_PATH, *extra_args],
+                              capture_output=True, text=True, env=env)
+
+    def test_traversal_session_id_is_rejected(self):
+        home = tempfile.mkdtemp()
+        r = self._run(home, "--session", "../../../../etc")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("invalid session id", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_session_id_with_slash_is_rejected(self):
+        home = tempfile.mkdtemp()
+        r = self._run(home, "--session", "sess/../../outside")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("invalid session id", r.stderr)
+
+    def test_named_session_that_does_not_exist_reports_error_not_archive_fallback(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write(json.dumps({"decision_id": "d1", "tool": "Bash",
+                                "chars_before": 100, "chunks": []}) + "\n")
+        r = self._run(home, "--session", "does-not-exist")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no such session", r.stderr)
+        # 錯誤結束就不該再印任何統計數字（尤其不能是封存區的那 1 筆）。
+        self.assertEqual(r.stdout, "")
+
+    def test_valid_session_name_still_works(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "sess-1"), exist_ok=True)
+        with open(os.path.join(home, "sess-1", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write(json.dumps({"decision_id": "d1", "tool": "Bash",
+                                "chars_before": 100, "chunks": []}) + "\n")
+        r = self._run(home, "--session", "sess-1", "--json")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(json.loads(r.stdout)["decisions"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
