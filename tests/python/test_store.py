@@ -46,6 +46,27 @@ class TestRecords(unittest.TestCase):
         arch = os.path.join(self.root, "archive", "restores.jsonl")
         self.assertEqual(json.loads(open(arch).readline())["handle"], "d1.3")
 
+    def test_append_is_best_effort_when_one_destination_is_blocked(self):
+        # Block the archive location with a plain file instead of a
+        # directory, simulating the fault-injection scenario from review:
+        # the session-dir copy must still land and no exception may
+        # escape, because the caller is a fail-open hook.
+        archive_path = os.path.join(self.root, "archive")
+        with open(archive_path, "w", encoding="utf-8") as fh:
+            fh.write("not a directory")
+
+        self.s.record_decision({"decision_id": "d1"})  # must not raise
+
+        live = os.path.join(self.s.path, "decisions.jsonl")
+        rows = [json.loads(l) for l in open(live, encoding="utf-8")]
+        self.assertEqual(rows[0]["decision_id"], "d1")
+
+
+class TestAbsolutePath(unittest.TestCase):
+    def test_relative_root_yields_absolute_path(self):
+        s = store.Store("sess-rel", root="some/relative/tool-reduce-root")
+        self.assertTrue(os.path.isabs(s.path))
+
 
 class TestScrub(unittest.TestCase):
     def test_removes_secret_shaped_tokens(self):

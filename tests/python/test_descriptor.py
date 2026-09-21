@@ -25,6 +25,34 @@ class TestMake(unittest.TestCase):
         chunk = "a\nb\nc\n" * 30
         self.assertNotIn("\n", descriptor.make(chunk, "h.1"))
 
+    def test_honours_max_chars_when_handle_alone_blows_the_budget(self):
+        # room < 0: prefix + tail already exceed max_chars before any head
+        # text is added. The fallback must still be hard-capped.
+        d = descriptor.make("hello world", "h" * 300, max_chars=250)
+        self.assertLessEqual(len(d), 250)
+
+    def test_honours_max_chars_on_small_budget(self):
+        # room < 0 also fires with an ordinary handle once max_chars is
+        # small — this is the realistic trigger, not just an adversarial
+        # giant handle.
+        d = descriptor.make("hello world", "h.1", max_chars=10)
+        self.assertLessEqual(len(d), 10)
+
+    def test_room_exactly_zero_does_not_overflow_by_one(self):
+        # room == 0: the old code appended an ellipsis unconditionally,
+        # overflowing max_chars by exactly one character.
+        d = descriptor.make("hello world", "h.1", max_chars=28)
+        self.assertLessEqual(len(d), 28)
+
+    def test_handle_with_newline_does_not_break_single_line_guarantee(self):
+        d = descriptor.make("x", "evil\nhandle.1")
+        self.assertNotIn("\n", d)
+
+    def test_scrubs_secret_shaped_tokens_from_the_descriptor(self):
+        chunk = "token sk-abcdefghijklmnopqrstuvwxyz012345 leaked here"
+        d = descriptor.make(chunk, "h.1")
+        self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz012345", d)
+
 
 class TestDistinctive(unittest.TestCase):
     def test_returns_tokens_absent_from_other_chunks(self):
@@ -42,6 +70,10 @@ class TestDistinctive(unittest.TestCase):
         toks = descriptor.distinctive("see https://example.com/page and ab cd", [])
         self.assertFalse(any(t.startswith("http") for t in toks))
         self.assertNotIn("ab", toks)
+        # The domain/path after "://" is captured by TOKEN even though
+        # "https" itself is too short to match — the startswith("http")
+        # guard alone never catches this. The whole URL must be gone.
+        self.assertNotIn("example.com/page", toks)
 
 
 if __name__ == "__main__":

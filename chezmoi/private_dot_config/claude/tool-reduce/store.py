@@ -27,8 +27,8 @@ def now_ms():
 
 class Store:
     def __init__(self, session_id, root=None):
-        self.root = os.path.expanduser(
-            root or os.environ.get("TOOL_REDUCE_HOME", ROOT_DEFAULT))
+        self.root = os.path.abspath(os.path.expanduser(
+            root or os.environ.get("TOOL_REDUCE_HOME", ROOT_DEFAULT)))
         self.path = os.path.join(self.root, session_id)
         self.archive = os.path.join(self.root, "archive")
 
@@ -66,12 +66,19 @@ class Store:
             return None
 
     def _append(self, name, rec):
+        """盡力而為、不保證原子性：兩份目的地各自獨立嘗試，任一份失敗不影響
+        另一份，也絕不讓例外逸出——呼叫端是 fail-open 的 hook，這裡丟例外
+        會讓整個過濾流程中斷，而紀錄遺失一份的代價遠比中斷整條流程小。
+        """
         rec.setdefault("ts_ms", now_ms())
         line = json.dumps(rec, ensure_ascii=False) + "\n"
         for d in (self.path, self.archive):
-            self._ensure(d)
-            with open(os.path.join(d, name), "a", encoding="utf-8") as fh:
-                fh.write(line)
+            try:
+                self._ensure(d)
+                with open(os.path.join(d, name), "a", encoding="utf-8") as fh:
+                    fh.write(line)
+            except OSError:
+                pass
 
     def record_decision(self, rec):
         self._append("decisions.jsonl", rec)
