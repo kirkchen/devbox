@@ -9,7 +9,7 @@ eval 與 tune 共用同一份實作，避免線上跟離線漂移。
 
 模式由 ROUTER_MODE 決定：off（預設）| shadow | fill-only | full
 """
-import json, os, sys, time, hashlib, datetime
+import json, os, sys, time, hashlib, datetime, glob
 import urllib.request, urllib.error
 
 R = os.path.expanduser(os.environ.get("ROUTER_HOME", "~/.config/claude/model-router"))
@@ -17,11 +17,88 @@ LOG = os.path.expanduser(os.environ.get("ROUTER_LOG", f"{R}/decisions.jsonl"))
 API = os.environ.get("ROUTER_API", "https://api.typesafe.ai/v1/systemone")
 TIMEOUT = float(os.environ.get("ROUTER_TIMEOUT", "2.5"))
 MAX_PROMPT = 16000           # 送進 Jev 的上限，避開 state 過大掉準
-ROUTABLE = {"general-purpose", "claude", "Explore", "Plan"}
+
+# 只有這裡列的才跳過，其餘一律路由——白名單反過來會讓每個新 agent type 預設不受控。
+# fork：Agent tool 的合約明訂 fork 永遠跑在 parent 的 model 上，傳 model 覆寫會被忽略，
+# 路由它只是白花一次 Jev 呼叫加 ~0.8s。
+SKIP_SUBAGENTS = {"fork"}
 
 
 def bail():
     sys.exit(0)
+
+
+def _agent_file(name):
+    """Candidate definition-file paths for a subagent_type, in priority order."""
+    if ":" in name:                      # plugin agent, e.g. "codex:codex-rescue"
+        plugin, agent = name.split(":", 1)
+        yield from glob.glob(os.path.expanduser(
+            f"~/.claude/plugins/cache/*/{glob.escape(plugin)}/*/agents/{glob.escape(agent)}.md"))
+    else:                                # project agent, then user agent
+        yield os.path.join(os.getcwd(), ".claude", "agents", f"{name}.md")
+        yield os.path.expanduser(f"~/.claude/agents/{name}.md")
+
+
+def _parse_frontmatter_model(path):
+    """Read `model:` from the first ---delimited frontmatter block only.
+
+    Returns None when the file can't be read/decoded, has no frontmatter block,
+    or the block has no (non-empty) `model:` key. A `model:` line appearing after
+    the closing `---` (i.e. in the body) is never considered. Never raises.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except Exception:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    model = None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        stripped = line.strip()
+        if stripped.startswith("model:"):
+            value = stripped[len("model:"):].strip().strip('"').strip("'")
+            model = value or None
+    return model
+
+
+def resolve_pinned_model(subagent):
+    """Model pinned in subagent's definition file, or None (no file / no model key).
+
+    Uses the first candidate path that exists (project agent shadows user agent,
+    same as Claude Code itself); does not fall through past it. Fail-open: any
+    unexpected error resolving the path also just means "no pin found".
+    """
+    try:
+        for path in _agent_file(subagent):
+            if os.path.exists(path):
+                return _parse_frontmatter_model(path)
+    except Exception:
+        return None
+    return None
+
+
+def is_pinned(subagent):
+    """True if subagent's frontmatter pins a concrete model (not the unset `inherit`)."""
+    model = resolve_pinned_model(subagent)
+    return bool(model) and model.strip().lower() != "inherit"
+
+
+def is_routable(subagent_type):
+    """Whether a PreToolUse Agent/Task dispatch should go through the router.
+
+    Routing is the default. Skip only for the explicit skip set (SKIP_SUBAGENTS)
+    or when the agent's frontmatter pins a concrete model — a deliberate author
+    choice that the hook's updatedInput must not silently override.
+    An omitted subagent_type is normalised to "general-purpose" (what Claude Code
+    actually dispatches when the caller leaves it out), so it still routes.
+    """
+    subagent = subagent_type or "general-purpose"
+    if subagent in SKIP_SUBAGENTS:
+        return False
+    return not is_pinned(subagent)
 
 
 def load_env(path):
@@ -54,13 +131,16 @@ def main():
         bail()
 
     ti = inp.get("tool_input") or {}
-    subagent = ti.get("subagent_type")
+    # 省略 subagent_type 時 Claude Code 實際派給 general-purpose，這裡對齊，
+    # 否則 None not in ROUTABLE 之類的判斷會讓省略型別整批繞過路由。
+    subagent = ti.get("subagent_type") or "general-purpose"
     prompt = ti.get("prompt") or ""
     requested = ti.get("model")
     tool_use_id = inp.get("tool_use_id")
 
-    # eval-judge 由 /judge-backlog 派、模型固定在 frontmatter，不路由
-    if subagent == "eval-judge" or subagent not in ROUTABLE or not prompt:
+    # is_routable() 涵蓋 eval-judge：它的 frontmatter 釘死 model: opus（見
+    # ~/.claude/agents/eval-judge.md），不需要再硬編這個名字。
+    if not is_routable(subagent) or not prompt:
         bail()
 
     sys.path.insert(0, R)
