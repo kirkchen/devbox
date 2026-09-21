@@ -1,0 +1,48 @@
+# tests/python/test_descriptor.py
+import sys, os, unittest
+sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                "../../chezmoi/private_dot_config/claude/tool-reduce"))
+import descriptor
+
+
+class TestMake(unittest.TestCase):
+    def test_includes_line_count_and_handle(self):
+        chunk = "\n".join(f"line {i}" for i in range(42))
+        d = descriptor.make(chunk, "a3f2.7")
+        self.assertIn("42", d)
+        self.assertIn("tr-restore a3f2.7", d)
+        self.assertTrue(d.startswith("[") and d.endswith("]"))
+
+    def test_uses_first_meaningful_line(self):
+        chunk = "\n\n   \n/Users/kirk/Code/x/main.tf:36:# Internal LB\nmore\n"
+        self.assertIn("main.tf", descriptor.make(chunk, "h.1"))
+
+    def test_respects_max_chars(self):
+        chunk = "x" * 5000 + "\n" + "y" * 5000
+        self.assertLessEqual(len(descriptor.make(chunk, "h.1", max_chars=250)), 250)
+
+    def test_is_single_line(self):
+        chunk = "a\nb\nc\n" * 30
+        self.assertNotIn("\n", descriptor.make(chunk, "h.1"))
+
+
+class TestDistinctive(unittest.TestCase):
+    def test_returns_tokens_absent_from_other_chunks(self):
+        c = "resource google_compute_target_https_proxy uat_proxy_8821"
+        others = ["resource google_compute_address prod_addr"]
+        toks = descriptor.distinctive(c, others)
+        self.assertIn("uat_proxy_8821", toks)
+        self.assertNotIn("resource", toks)
+
+    def test_respects_limit(self):
+        c = " ".join(f"identifier_{i}" for i in range(200))
+        self.assertLessEqual(len(descriptor.distinctive(c, [], limit=40)), 40)
+
+    def test_drops_urls_and_short_tokens(self):
+        toks = descriptor.distinctive("see https://example.com/page and ab cd", [])
+        self.assertFalse(any(t.startswith("http") for t in toks))
+        self.assertNotIn("ab", toks)
+
+
+if __name__ == "__main__":
+    unittest.main()
