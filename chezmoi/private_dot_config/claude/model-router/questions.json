@@ -1,0 +1,49 @@
+{
+  "model": "jev-latest",
+  "_note": "Instructions and criteria are written in English: Jev's primary training language is English and other languages have lower accuracy. The `state` still carries the task's original language, which we cannot control.",
+  "questions": {
+    "reasoning_depth": {
+      "type": "score",
+      "instructions": "`task` is a unit of work being handed to an AI coding agent. How much reasoning does completing it require? Judge the nature of the work itself. A long instruction is not evidence of a hard task.",
+      "criteria": [
+        "Mechanical execution of explicit directions: locate a string, list files, read a section and report it back",
+        "Requires reading and understanding existing code before acting, but the approach is stated and no design decision is needed",
+        "Requires decomposing the problem, weighing alternative approaches, or diagnosing a failure whose cause is unknown"
+      ]
+    },
+    "spec_completeness": {
+      "type": "score",
+      "instructions": "`task` is an instruction given to an AI coding agent. How completely does it specify HOW the work should be done?",
+      "criteria": [
+        "States only the goal or the problem; the agent must work out the approach itself",
+        "Describes the approach in general terms, but the agent must supply specifics, affected files, and edge cases",
+        "Enumerates every check to perform, the code to write, or fully determined step-by-step directions; the agent only has to carry them out"
+      ]
+    },
+    "is_readonly_lookup": {
+      "type": "noul",
+      "instructions": "Does this work only require finding information and reporting it back, without judging quality, deciding anything, or modifying anything?",
+      "criteria": {
+        "true": "Locate files, symbols, or usages and report what was found",
+        "false": "Requires evaluating, designing, modifying code, or diagnosing a problem"
+      }
+    },
+    "is_retry_after_failure": {
+      "type": "noul",
+      "instructions": "Does `task` describe work that follows a previous attempt that fell short — fixing review findings, repairing failing tests, or redoing something that got stuck?",
+      "criteria": {
+        "true": "References a prior implementation, review findings, failing tests, or defects to repair",
+        "false": "Work starting from scratch"
+      }
+    },
+    "consequence_of_miss": {
+      "type": "score",
+      "instructions": "If the agent doing this work misses a problem or does it sloppily, how bad is the consequence?",
+      "criteria": [
+        "Immediately visible and cheap to correct",
+        "Causes rework, but a later checkpoint will catch it",
+        "Could reach the main line silently: a security flaw, incorrect data, or a defect no other checkpoint will catch"
+      ]
+    }
+  }
+}
