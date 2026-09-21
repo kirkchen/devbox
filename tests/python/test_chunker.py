@@ -85,5 +85,64 @@ class TestBounds(unittest.TestCase):
         self.assertTrue(all(len(c) >= 200 for c in cs[:-1]))
 
 
+class TestWhitespaceFold(unittest.TestCase):
+    """Regression tests for the fold-not-drop fix in chunk()'s tail.
+
+    The fixed-width fallback tier (last resort, used when nothing in the
+    separator ladder matches) can land a cut boundary entirely inside a long
+    run of whitespace -- e.g. markdown table column padding -- producing a
+    piece that strips to empty but still holds real payload characters.
+    An earlier version dropped such pieces with `[c for c in merged if
+    c.strip()]`, which silently broke ''.join(chunks) == payload because the
+    invariant assert ran on the list *before* that filter. These fixtures
+    are built to have no separator ladder match at all (no headings, hr
+    lines, diff/commit markers, blank-line runs, or grep-style `path:line:`
+    prefixes), so `_split` is forced into the fixed-width fallback and its
+    cuts land inside the whitespace runs deterministically -- not fished
+    from a real transcript.
+    """
+
+    def test_whitespace_run_forces_fixed_width_cut_fold(self):
+        """Markdown-table-padding shape: short cell markers separated by
+        wide space-padding, so a fixed-width cut lands inside the padding."""
+        t = "\n".join(f"| cell{i} |" + " " * 3000 for i in range(5))
+        cs, kind = chunker.chunk(t)
+        self.assertEqual("".join(cs), t)
+
+    def test_consecutive_whitespace_pieces_fold_into_one_neighbour(self):
+        """A single wide gap spans many fixed-width pieces in a row, so the
+        `for c in merged: if not c.strip() and final: final[-1] += c` loop
+        must fold more than one consecutive blank piece into the same
+        neighbour, not just one."""
+        t = "HEAD" + " " * 6000 + "TAIL"
+        cs, kind = chunker.chunk(t)
+        self.assertEqual("".join(cs), t)
+        self.assertTrue(all(c.strip() for c in cs),
+                         "a whitespace-only piece survived as its own chunk")
+
+    def test_leading_whitespace_piece_folds_forward(self):
+        """Payload starts with a long whitespace run before any real
+        content, so `final[0]` is blank when the first loop finishes and the
+        `while len(final) > 1 and not final[0].strip()` loop must fold it
+        forward onto the next chunk."""
+        t = " " * 6000 + "TAIL"
+        cs, kind = chunker.chunk(t)
+        self.assertEqual("".join(cs), t)
+
+    def test_entirely_whitespace_payload_not_dropped(self):
+        t = " " * 5000
+        cs, kind = chunker.chunk(t)
+        self.assertEqual("".join(cs), t)
+        self.assertEqual(cs, [t])
+
+    def test_max_chunks_bound_holds_after_whitespace_fold(self):
+        """A wide gap forces multiple whitespace-only pieces that must fold
+        away; the post-fold chunk count still must not exceed max_chunks."""
+        t = "HEAD" + " " * 30000 + "TAIL"
+        cs, kind = chunker.chunk(t, max_chunks=4, min_chars=300)
+        self.assertEqual("".join(cs), t)
+        self.assertLessEqual(len(cs), 4)
+
+
 if __name__ == "__main__":
     unittest.main()
