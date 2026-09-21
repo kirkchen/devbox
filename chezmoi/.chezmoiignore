@@ -82,3 +82,6 @@ target
 # Python bytecode
 **/__pycache__
 **/*.pyc
+
+# TypeSafe / model router 密鑰與開關（machine-local，不進 repo）
+.config/claude/typesafe.env
