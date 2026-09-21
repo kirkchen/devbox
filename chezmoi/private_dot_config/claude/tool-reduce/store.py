@@ -1,14 +1,14 @@
 """存放區與紀錄。
 
-段落原文放 session 存放區(700,隨 session 清除)。紀錄同時寫一份到封存區供離線分析,
-封存區只存紀錄、不存原文 —— Layer 1 的比對改用獨有詞集合(見 descriptor.distinctive)。
+段落原文放 session 存放區（700，隨 session 清除）。紀錄同時寫一份到封存區供離線分析，
+封存區只存紀錄、不存原文 —— Layer 1 的比對改用獨有詞集合（見 descriptor.distinctive）。
 """
 import json, os, re, time
 
 ROOT_DEFAULT = "~/.claude/tool-reduce"
 HANDLE_RE = re.compile(r"^[A-Za-z0-9]+\.\d+$")
 
-# 常見密鑰樣式。獨有詞集合可能夾帶金鑰片段(長 token 會被當識別字),封存前過濾掉。
+# 常見密鑰樣式。獨有詞集合可能夾帶金鑰片段（長 token 會被當識別字），封存前過濾掉。
 SECRET_RE = re.compile(
     r"^(sk-|pk-|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xox[baprs]-|apikey|AKIA|ASIA)"
     r"|^[A-Za-z0-9+/]{40,}={0,2}$",
@@ -21,7 +21,7 @@ def scrub(tokens):
 
 
 def now_ms():
-    """BSD date 不支援 %3N 而且不報錯,毫秒時戳一律走 Python。"""
+    """BSD date 不支援 %3N 而且不報錯，毫秒時戳一律走 Python。"""
     return int(time.time() * 1000)
 
 
