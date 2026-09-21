@@ -234,6 +234,24 @@ if command -v jq &>/dev/null; then
     pf_json=$(jq -n --arg cmd "$protect_files_cmd" '{"type":"command","command":$cmd}')
     ensure_hook_with_matcher "PreToolUse" "Write|Edit|MultiEdit" "$protect_files_cmd" "$pf_json"
 
+    # -- PreToolUse(Agent): model router --
+    # 預設不作用：要在 ~/.config/claude/typesafe.env 設 ROUTER_MODE（shadow/fill-only/full）
+    router_cmd="~/.config/claude/hooks/model-router.py"
+    router_json=$(jq -n --arg cmd "$router_cmd" '{"type":"command","command":$cmd,"timeout":6}')
+    ensure_hook_with_matcher "PreToolUse" "Agent|Task" "$router_cmd" "$router_json"
+
+    # -- SubagentStop: 保存 subagent 報告（供 model router 覆盤/標註） --
+    # 預設不作用：要在 ~/.config/claude/typesafe.env 設 ARCHIVE_SUBAGENT_REPORTS=1
+    archive_cmd="~/.config/claude/hooks/archive-subagent-report.sh"
+    archive_json=$(jq -n --arg cmd "$archive_cmd" '{"type":"command","command":$cmd,"timeout":10}')
+    ensure_hook "SubagentStop" "$archive_cmd" "$archive_json"
+
+    # -- SubagentStop: Layer 1 完成度篩檢（async，不阻塞 handback） --
+    # 預設不作用：要設 JUDGE_SUBAGENT_OUTPUT=1
+    judge_cmd="~/.config/claude/hooks/judge-subagent-output.sh"
+    judge_json=$(jq -n --arg cmd "$judge_cmd" '{"type":"command","command":$cmd,"async":true}')
+    ensure_hook "SubagentStop" "$judge_cmd" "$judge_json"
+
     # -- PreCompact: transcript backup --
     backup_cmd='mkdir -p .claude/backups && cp "$CLAUDE_TRANSCRIPT_PATH" ".claude/backups/$(date +%Y%m%d-%H%M%S)-transcript.jsonl" 2>/dev/null || true'
     backup_json=$(jq -n --arg cmd "$backup_cmd" '{"type":"command","command":$cmd,"async":true,"timeout":10}')
@@ -275,7 +293,24 @@ else
 fi
 
 # ============================================================
-# 5. Install custom commands
+# 5. Install subagent definitions
+# ============================================================
+
+AGENTS_SRC="${SOURCE_DIR}/claude-code/agents"
+
+if [ -n "$SOURCE_DIR" ] && [ -d "$AGENTS_SRC" ]; then
+    mkdir -p "$HOME/.claude/agents"
+    for agent_file in "$AGENTS_SRC"/*.md; do
+        [ -f "$agent_file" ] || continue
+        cp "$agent_file" "$HOME/.claude/agents/"
+        echo "✓ Installed agent: $(basename "$agent_file" .md)"
+    done
+else
+    echo "⚠ Agents source not found at $AGENTS_SRC, skipping"
+fi
+
+# ============================================================
+# 6. Install custom commands
 # ============================================================
 
 COMMANDS_SRC="${SOURCE_DIR}/claude-code/commands"
