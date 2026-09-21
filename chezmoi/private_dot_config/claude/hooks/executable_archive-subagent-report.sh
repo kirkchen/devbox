@@ -21,10 +21,13 @@ mkdir -p "$DIR" 2>/dev/null || exit 0
 
 INPUT=$(cat)
 AGENT_ID=$(jq -r '.agent_id // empty' <<<"$INPUT" 2>/dev/null)
+AGENT_TYPE=$(jq -r '.agent_type // empty' <<<"$INPUT" 2>/dev/null)
 [[ -n "$AGENT_ID" ]] || exit 0
+# agent_type 為空代表這不是一次 subagent dispatch，存下來只是垃圾
+[[ -n "$AGENT_TYPE" ]] || exit 0
 
 # eval-judge 是標註用的 agent，判它自己會污染 corpus
-[[ "$(jq -r '.agent_type // empty' <<<"$INPUT" 2>/dev/null)" == "eval-judge" ]] && exit 0
+[[ "$AGENT_TYPE" == "eval-judge" ]] && exit 0
 
 # 也把當初的 dispatch prompt 存下來：它在 subagent transcript 的第一則 user 訊息，
 # 而那個檔案 session 結束後會被清掉，事後撈不到。

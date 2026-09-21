@@ -29,9 +29,12 @@ CWD=$(jq -r '.cwd // empty'                        <<<"$INPUT" 2>/dev/null)
 TPATH=$(jq -r '.agent_transcript_path // empty'    <<<"$INPUT" 2>/dev/null)
 OUTPUT=$(jq -r '.last_assistant_message // empty'  <<<"$INPUT" 2>/dev/null)
 [[ -n "$AGENT_ID" && -n "$OUTPUT" ]] || exit 0
+# agent_type 為空代表這不是一次 subagent dispatch（主 session 的 Stop 也會走到
+# 這個事件），存下來只會污染 corpus
+[[ -n "$AGENT_TYPE" ]] || exit 0
 
 # eval-judge 是標註用的 agent，判它自己會污染 corpus
-[[ "$(jq -r '.agent_type // empty' <<<"$INPUT" 2>/dev/null)" == "eval-judge" ]] && exit 0
+[[ "$AGENT_TYPE" == "eval-judge" ]] && exit 0
 
 # 當初的 dispatch prompt = subagent transcript 的第一則 user 訊息
 REQUEST=""
@@ -49,11 +52,14 @@ REQ=$(jq -n \
     state: {agent_type: $at, request: $req, output: $out},
     questions: $q[0].questions}' 2>/dev/null) || exit 0
 
-T0=$(date +%s%3N 2>/dev/null || python3 -c 'import time;print(int(time.time()*1000))')
+# 毫秒時戳。不能用 `date +%s%3N`：BSD date 不支援 %3N 但也不報錯，
+# 會回傳結尾帶 N 的字串，後面的算術就整個炸掉而且 || fallback 不會觸發。
+now_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
+T0=$(now_ms)
 RESP=$(curl -sS --max-time 20 https://api.typesafe.ai/v1/systemone \
   -H "Authorization: Bearer $TYPESAFE_API_KEY" \
   -H "Content-Type: application/json" -d "$REQ") || exit 0
-T1=$(date +%s%3N 2>/dev/null || python3 -c 'import time;print(int(time.time()*1000))')
+T1=$(now_ms)
 
 jq -e '.answers' >/dev/null 2>&1 <<<"$RESP" || exit 0
 
