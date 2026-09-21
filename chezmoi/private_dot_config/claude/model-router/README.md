@@ -14,14 +14,68 @@
 
 eval 資料集另外放在 `~/.local/share/model-router-eval/`，因為裡面有工作專案的 prompt 內容，不進 dotfiles repo。
 
-## 開關
+## 設定架構
 
-`~/.config/claude/typesafe.env`（權限 600，由 chezmoi template 從 1Password 產生）：
+### 唯一的設定來源
+
+`~/.config/claude/typesafe.env`（權限 600）。
+
+**這個檔案不由 chezmoi 管理**，已列入 `.chezmoiignore`。做成 chezmoi template 就得把密鑰
+存進 `~/.config/chezmoi/chezmoi.toml` 明文，所以改成 machine-local；`chezmoi apply`
+不會覆寫也不會刪除它。換機器要手動建。
 
 ```sh
-TYPESAFE_API_KEY=...
-ROUTER_MODE=shadow     # off | shadow | fill-only | full
+TYPESAFE_API_KEY=...          # https://console.typesafe.ai/keys
+ROUTER_MODE=shadow            # off | shadow | fill-only | full
+ROUTER_NOTIFY=applied         # off | applied | all
+ARCHIVE_SUBAGENT_REPORTS=1
+JUDGE_SUBAGENT_OUTPUT=1
 ```
+
+三支 hook 各自讀這個檔案，不依賴 shell 環境（hook 不繼承互動式 shell 的 env）：
+
+- 兩支 `.sh` 用 `. "$CONF"`
+- `model-router.py` 用自己的 `load_env()` 逐行 parse `KEY=VALUE`，**不 source shell**，
+  避免執行檔案裡的任意內容
+
+### 所有環境變數
+
+日常只需要上面五個，其餘是測試與搬移用的覆寫點。
+
+| 變數 | 預設 | 讀取者 |
+|---|---|---|
+| `TYPESAFE_API_KEY` | 無（未設則所有 hook 靜默跳過） | 三支 hook、`run_eval.py` |
+| `ROUTER_MODE` | `off` | `model-router.py` |
+| `ROUTER_NOTIFY` | `applied` | `model-router.py` |
+| `ARCHIVE_SUBAGENT_REPORTS` | `0` | `archive-subagent-report.sh` |
+| `JUDGE_SUBAGENT_OUTPUT` | `0` | `judge-subagent-output.sh` |
+| `ROUTER_HOME` | `~/.config/claude/model-router` | `model-router.py`（找 policy 與 questions） |
+| `ROUTER_LOG` | `$ROUTER_HOME/decisions.jsonl` | `model-router.py`、`tune.py` |
+| `ROUTER_API` | `https://api.typesafe.ai/v1/systemone` | `model-router.py`（測試用） |
+| `ROUTER_TIMEOUT` | `2.5`（秒） | `model-router.py` |
+| `ROUTER_PROJECTS` | `~/.claude/projects/*` | `tune.py` |
+| `SUBAGENT_REPORT_DIR` | `~/.local/share/model-router-eval/reports` | `archive-subagent-report.sh` |
+| `EVAL_CORPUS` | `~/.local/share/model-router-eval/corpus.jsonl` | `judge-subagent-output.sh` |
+| `EVAL_DIR` | `~/.local/share/model-router-eval` | `select_layer2.py`、`merge_layer2.py`、`tune.py` |
+
+### 檔案在哪
+
+| 路徑 | 內容 | 誰產生 |
+|---|---|---|
+| `chezmoi/private_dot_config/claude/` | **原始碼,唯一的真實來源** | 人 |
+| `~/.config/claude/model-router/` | 部署後的工具 | `chezmoi apply` |
+| `~/.config/claude/hooks/` | 部署後的 hook | `chezmoi apply` |
+| `~/.claude/settings.json` | hook 註冊 | `run_onchange_05-configure-claude-settings.sh` |
+| `~/.claude/agents/eval-judge.md`、`~/.claude/commands/judge-backlog.md` | agent 與指令 | 同上 |
+| `~/.config/claude/typesafe.env` | 密鑰與開關 | **手動** |
+| `~/.config/claude/model-router/thresholds.json` | 調校後的門檻（不存在則用 `policy.DEFAULTS`） | `tune.py --apply` |
+| `~/.config/claude/model-router/decisions.jsonl` | 路由決策，含 Jev 原始答案 | `model-router.py` |
+| `~/.local/share/model-router-eval/` | reports/、corpus.jsonl、labels.jsonl、batches/ | hook 與 Layer 2 |
+
+改程式碼一律改 `chezmoi/` 底下，再 `chezmoi apply --source="./chezmoi" ~/.config/claude`。
+動到 hook 註冊或 agent/command 則要讓 `run_onchange_05` 重跑。
+
+## ROUTER_MODE 各模式的行為
 
 | 模式 | 行為 |
 |---|---|
