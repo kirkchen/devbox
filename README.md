@@ -398,6 +398,11 @@ The configuration automatically detects and adapts to:
 - **Linux**: APT/DNF package managers, Linux paths
 - **DevContainer**: Container-optimized settings, Gitpod management
 
+## Development Notes
+
+- [用 TypeSafe Jev 開發工具](docs/building-with-jev.md) — Jev 的使用方式、兩層 judge 的設計、
+  Claude Code hook 的實測事實（含官方文件寫錯的地方）與踩過的坑
+
 ## Troubleshooting
 
 ### Font Issues
