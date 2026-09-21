@@ -9,7 +9,6 @@
 """
 import json
 import os
-import re
 import shlex
 import sys
 
@@ -17,17 +16,11 @@ sys.path.insert(0, os.path.expanduser(os.environ.get(
     "TOOL_REDUCE_LIB", "~/.config/claude/tool-reduce")))
 import store
 
-# "tool-reduce" 前面不能是英數字、底線或連字號 —— 否則 `mytool-reduce/`、
-# `footool-reduce/`、`nottool-reduce/` 這種目錄名稱只是恰好以 tool-reduce
-# 結尾／夾帶這個子字串，會被誤判成「讀了存放區的檔案」，明明跟這支 hook
-# 認的存放區完全無關（同一類 fix-round 2 教訓：純子字串比對抓不準，見
-# executable_tool-reduce.py 的 _invokes_restore_cli 用 basename 整詞比對
-# 取代字詞邊界 regex 的理由）。用否定回顧斷言而不是要求前面一定是 `/`
-# 或字串開頭，是因為合法的相對路徑（例如指令直接寫
-# `cat tool-reduce/sess/x.1.txt`）前面是空白字元，不該被這道防線一併擋掉
-# —— 只有「tool-reduce 是某個更長識別字的字尾」這一種情況才要擋。
-HANDLE_IN_PATH = re.compile(
-    r"(?<![A-Za-z0-9_-])tool-reduce/[^/\s\"']+/([A-Za-z0-9]+\.\d+)\.txt")
+# 這段跑在每一次 Bash／Read 呼叫之前（PreToolUse，沒有 Task 6 那道
+# SIZE_GATE 先篩過），比 PostToolUse hook 更熱，所以候選路徑數量跟掃描的
+# blob 大小都要封頂 —— 跟 executable_tool-reduce.py 的 fix-round 3 同一招。
+_MAX_CHECK_BLOB_CHARS = 64 * 1024
+_MAX_CHECK_TOKENS = 32
 
 
 def _flatten_shell_tokens(text, _depth=0):
@@ -65,6 +58,55 @@ def _invokes_restore_cli(command):
                for t in _flatten_shell_tokens(command))
 
 
+def _store_root_real():
+    """存放區根目錄的正規化絕對路徑，每次呼叫都重算，不在模組載入當下
+    凍結成常數 —— 跟 executable_tool-reduce.py 的 _store_root_real 同一招
+    （見該檔案該函式的 docstring）：store.Store 每次建構都重新讀一次
+    TOOL_REDUCE_HOME，這裡凍結成模組常數的話，同一個行程裡先讀早、後設
+    環境變數的呼叫端一樣看不到新值。realpath 疊在 store.root() 的 abspath
+    結果外面，處理 symlink，跟 store.load_chunk 驗證 handle 同一招。"""
+    return os.path.realpath(store.root())
+
+
+def _path_tokens(blob):
+    """跟 executable_tool-reduce.py 的同名函式是同一個演算法：只認「開頭
+    長得像路徑」的 token（`/`、`~/`、`./`、`../`），不是任何含 `/` 的片段
+    都算——存放區根目錄本身一定是絕對路徑，一個真的指到存放區的直接讀取
+    一定會用絕對路徑或 `~` 開頭的路徑，不可能是日期、分數或程式碼片段
+    （見 Task 6 fix-round 3）。這個形狀過濾器的代價：完全沒有路徑前綴的
+    相對寫法（例如指令直接寫 `cat sess/x.1.txt`，不是
+    `cat ./sess/x.1.txt`）不會被當成候選——跟 Task 6 接受的取捨一樣。"""
+    for raw in blob.split():
+        tok = raw.strip("\"',{}[]:;")
+        if tok.startswith(("/", "~/", "./", "../")):
+            yield tok
+
+
+def _handle_under_store_root(tok, store_root_real):
+    """token 展開、正規化後是不是真的落在目前設定的存放區根目錄底下——
+    跟 store.load_chunk 驗證 handle、Task 6 的 _reads_store_file 同一招：
+    用路徑正規化 + containment 比對，不是死認目錄字面上叫不叫
+    "tool-reduce"。這樣 TOOL_REDUCE_HOME 指到任何名稱的目錄都認得出來
+    （fix-round 1 抓到：字面比對版本在存放區目錄名稱不叫 tool-reduce 時
+    會整批漏記，而這支是「繞過 tr-restore 直接讀存放區檔案」這條路徑
+    唯一的守衛，漏記是永久漏記），也天生不會被 `mytool-reduce/`、
+    `footool-reduce/` 這類恰好同字尾的無關目錄名稱騙到——它們正規化後
+    不會落在真正設定的存放區底下，不需要再另外寫一條字詞邊界規則去擋。
+
+    檔名不是 `<handle>.txt`（例如落在存放區底下的其他檔案、或
+    decisions.jsonl 這類紀錄檔）就回傳 None，不硬湊一個 handle 出來。"""
+    real = os.path.realpath(os.path.expanduser(tok))
+    if real != store_root_real and not real.startswith(store_root_real + os.sep):
+        return None
+    base = os.path.basename(real)
+    if not base.endswith(".txt"):
+        return None
+    handle = base[:-len(".txt")]
+    if not store.HANDLE_RE.match(handle):
+        return None
+    return handle
+
+
 def detect(ev):
     """回傳 tool_input 裡出現的 handle。
 
@@ -77,8 +119,16 @@ def detect(ev):
     command = ti.get("command") if isinstance(ti, dict) else None
     if isinstance(command, str) and _invokes_restore_cli(command):
         return []
-    blob = json.dumps(ti, ensure_ascii=False)
-    return list(dict.fromkeys(HANDLE_IN_PATH.findall(blob)))
+    store_root_real = _store_root_real()
+    blob = json.dumps(ti, ensure_ascii=False)[:_MAX_CHECK_BLOB_CHARS]
+    handles = []
+    for i, tok in enumerate(_path_tokens(blob)):
+        if i >= _MAX_CHECK_TOKENS:
+            break
+        h = _handle_under_store_root(tok, store_root_real)
+        if h is not None:
+            handles.append(h)
+    return list(dict.fromkeys(handles))
 
 
 def main():

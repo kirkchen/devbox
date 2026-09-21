@@ -80,8 +80,16 @@ class TestGuard(unittest.TestCase):
         self.assertEqual(guard.detect(ev), ["abc123.4"])
 
     def test_detects_handle_in_read_path(self):
+        # fix-round 1: detect() now confirms containment against the
+        # actually-configured store root (store.root()), not a literal
+        # "tool-reduce" text match, so the path here must genuinely resolve
+        # under the real default root (TOOL_REDUCE_HOME unset in this
+        # class) — os.path.expanduser("~/...") does that regardless of
+        # whose machine this runs on, a hardcoded foreign home directory
+        # would not.
         ev = {"tool_name": "Read",
-              "tool_input": {"file_path": "/Users/x/.claude/tool-reduce/s/dd99.12.txt"}}
+              "tool_input": {"file_path": os.path.expanduser(
+                  "~/.claude/tool-reduce/s/dd99.12.txt")}}
         self.assertEqual(guard.detect(ev), ["dd99.12"])
 
     def test_ignores_unrelated_calls(self):
@@ -125,9 +133,11 @@ class TestGuardDoesNotDoubleCount(unittest.TestCase):
 
     def test_path_based_read_tool_is_still_detected(self):
         # 對照組的另一半：Read 工具直接讀墓碑對應檔案，tool_input 裡完全
-        # 沒有 command 欄位、也沒有提到 tr-restore，一樣要被抓到。
+        # 沒有 command 欄位、也沒有提到 tr-restore，一樣要被抓到。路徑要
+        # 真的落在目前設定的存放區根目錄底下（理由同
+        # TestGuard.test_detects_handle_in_read_path）。
         ev = {"tool_name": "Read", "tool_input": {
-            "file_path": "/Users/x/.claude/tool-reduce/s/dd99.12.txt"}}
+            "file_path": os.path.expanduser("~/.claude/tool-reduce/s/dd99.12.txt")}}
         self.assertEqual(guard.detect(ev), ["dd99.12"])
 
     def test_helper_binary_with_similar_name_is_not_mistaken_for_tr_restore(self):
@@ -144,7 +154,10 @@ class TestGuardDoesNotDoubleCount(unittest.TestCase):
 class TestGuardCannotBeFooledByUnrelatedPaths(unittest.TestCase):
     """task-7 陷阱提示：「guard 從路徑抽 handle，確認不會被騙去記一個根本
     不在存放區裡的檔案」。目錄名稱只是恰好以 tool-reduce 結尾／夾帶這個
-    子字串，跟這支 hook 認的存放區完全無關。"""
+    子字串，跟這支 hook 認的存放區（TOOL_REDUCE_HOME 未設時是預設的
+    ~/.claude/tool-reduce）完全無關 —— fix-round 1 之後這兩個案例不再是
+    靠字詞邊界 regex 擋，是 containment 比對本來就通不過（這兩條路徑
+    正規化後都不落在真正設定的存放區底下）。"""
 
     def test_directory_name_ending_in_tool_reduce_is_not_matched(self):
         ev = {"tool_name": "Bash", "tool_input": {
@@ -156,18 +169,24 @@ class TestGuardCannotBeFooledByUnrelatedPaths(unittest.TestCase):
             "file_path": "/tmp/footool-reduce/x/y.1.txt"}}
         self.assertEqual(guard.detect(ev), [])
 
-    def test_relative_tool_reduce_path_is_still_matched(self):
-        # 反面確認：不是每個「tool-reduce 前面不是 `/`」的情況都該被擋 ——
-        # 合法的相對路徑（前面是空白字元，不是英數字／底線／連字號）要
-        # 繼續被認得出來，這道防線只擋「tool-reduce 是某個更長識別字的
-        # 字尾」這一種情況。
-        ev = {"tool_name": "Bash", "tool_input": {
-            "command": "cat tool-reduce/sess/abc123.4.txt"}}
-        self.assertEqual(guard.detect(ev), ["abc123.4"])
-
     def test_handle_shaped_text_outside_the_store_layout_is_not_matched(self):
         ev = {"tool_name": "Bash", "tool_input": {
             "command": "echo 'the handle is abc123.4, see docs'"}}
+        self.assertEqual(guard.detect(ev), [])
+
+    def test_non_handle_filename_under_the_real_store_root_is_not_matched(self):
+        # 一個檔案真的落在存放區底下，containment 比對會過，但檔名不是
+        # `<handle>.txt` 的形狀（沒有 handle 那個 `字母.數字` 結構）——
+        # 不該硬湊一個 handle 出來，該回傳 []，不是一個格式不對的假 handle。
+        ev = {"tool_name": "Bash", "tool_input": {
+            "command": "cat ~/.claude/tool-reduce/sess/readme.txt"}}
+        self.assertEqual(guard.detect(ev), [])
+
+    def test_non_txt_file_under_the_real_store_root_is_not_matched(self):
+        # 存放區底下也放紀錄檔（decisions.jsonl 之類），不是 .txt 副檔名，
+        # 一樣不該被當成墓碑原文檔案。
+        ev = {"tool_name": "Bash", "tool_input": {
+            "command": "cat ~/.claude/tool-reduce/sess/decisions.jsonl"}}
         self.assertEqual(guard.detect(ev), [])
 
 
@@ -201,11 +220,12 @@ class TestGuardMainFailOpen(unittest.TestCase):
         self.assertEqual(r.stdout, "")
 
     def test_direct_read_records_a_restore(self):
-        # HANDLE_IN_PATH 認的是「路徑裡有沒有一段字面上叫 tool-reduce 的
-        # 目錄」，所以這裡把 TOOL_REDUCE_HOME 設成一個確實以 tool-reduce
-        # 結尾的暫存目錄，跟 store.ROOT_DEFAULT（~/.claude/tool-reduce）
-        # 一樣的形狀，而不是隨便一個暫存目錄名稱。
-        root = os.path.join(tempfile.mkdtemp(), "tool-reduce")
+        # TOOL_REDUCE_HOME 這裡故意設成一個名稱跟 tool-reduce 完全無關的
+        # 暫存目錄（tempfile.mkdtemp() 的原始名稱，例如 tmpXXXXXXXX）——
+        # fix-round 1 之前 detect() 靠字面比對目錄名稱叫不叫 "tool-reduce"，
+        # 這個案例會整批漏記；fix-round 1 之後改成 containment 比對
+        # store.root()，任何名稱的存放區根目錄都認得出來。
+        root = tempfile.mkdtemp()
         ev = json.dumps({"tool_name": "Bash", "session_id": "sess-g",
                          "tool_input": {"command":
                              f"cat {root}/sess-g/abc123.4.txt"}})
