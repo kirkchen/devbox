@@ -69,9 +69,13 @@ class Store:
         """盡力而為、不保證原子性：兩份目的地各自獨立嘗試，任一份失敗不影響
         另一份，也絕不讓例外逸出——呼叫端是 fail-open 的 hook，這裡丟例外
         會讓整個過濾流程中斷，而紀錄遺失一份的代價遠比中斷整條流程小。
+        序列化失敗（rec 帶了 json 無法處理的值）視同兩份都失敗，整筆跳過。
         """
         rec.setdefault("ts_ms", now_ms())
-        line = json.dumps(rec, ensure_ascii=False) + "\n"
+        try:
+            line = json.dumps(rec, ensure_ascii=False) + "\n"
+        except (TypeError, ValueError):
+            return
         for d in (self.path, self.archive):
             try:
                 self._ensure(d)

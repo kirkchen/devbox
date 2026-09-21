@@ -61,6 +61,12 @@ class TestRecords(unittest.TestCase):
         rows = [json.loads(l) for l in open(live, encoding="utf-8")]
         self.assertEqual(rows[0]["decision_id"], "d1")
 
+    def test_unserialisable_record_does_not_raise(self):
+        # A value json.dumps() cannot handle (a set here) must not escape
+        # _append() as a TypeError — the docstring promises no exception
+        # ever escapes, and the caller is a fail-open hook.
+        self.s.record_decision({"decision_id": "d1", "bad": {1, 2, 3}})
+
 
 class TestAbsolutePath(unittest.TestCase):
     def test_relative_root_yields_absolute_path(self):

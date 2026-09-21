@@ -51,7 +51,9 @@ def make(chunk, handle, max_chars=250):
         if len(head) > room:
             head = head[:room - 1] + "…"
         result = prefix + head + tail
-    return result[:max_chars]
+    # max(0, ...): a negative max_chars must clamp to "nothing", not slice
+    # off the tail of the string (Python's [:-10] semantics).
+    return result[:max(0, max_chars)]
 
 
 def distinctive(chunk, others, limit=40):

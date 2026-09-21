@@ -53,6 +53,12 @@ class TestMake(unittest.TestCase):
         d = descriptor.make(chunk, "h.1")
         self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz012345", d)
 
+    def test_negative_max_chars_clamps_to_empty_not_negative_slice(self):
+        # result[:max_chars] with a negative max_chars slices off the tail
+        # of the string instead of truncating to a budget of "nothing".
+        d = descriptor.make("x" * 50, "aa11.0", max_chars=-10)
+        self.assertEqual(d, "")
+
 
 class TestDistinctive(unittest.TestCase):
     def test_returns_tokens_absent_from_other_chunks(self):
