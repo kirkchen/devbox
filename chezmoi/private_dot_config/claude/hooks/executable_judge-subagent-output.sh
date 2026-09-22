@@ -16,7 +16,7 @@ CONF="$HOME/.config/claude/typesafe.env"
 [[ "${JUDGE_SUBAGENT_OUTPUT:-0}" == "1" ]] || exit 0
 [[ -n "${TYPESAFE_API_KEY:-}" ]] || exit 0
 
-R="$HOME/.config/claude/model-router"
+R="${ROUTER_HOME:-$HOME/.config/claude/model-router}"
 CORPUS="${EVAL_CORPUS:-$HOME/.local/share/model-router-eval/corpus.jsonl}"
 MAX=12000   # request / output 各自送進 Jev 的字元上限，避開 state 過大掉準
 mkdir -p "$(dirname "$CORPUS")" 2>/dev/null || exit 0
@@ -27,8 +27,8 @@ AGENT_TYPE=$(jq -r '.agent_type // empty'          <<<"$INPUT" 2>/dev/null)
 SESSION=$(jq -r '.session_id // empty'             <<<"$INPUT" 2>/dev/null)
 CWD=$(jq -r '.cwd // empty'                        <<<"$INPUT" 2>/dev/null)
 TPATH=$(jq -r '.agent_transcript_path // empty'    <<<"$INPUT" 2>/dev/null)
-OUTPUT=$(jq -r '.last_assistant_message // empty'  <<<"$INPUT" 2>/dev/null)
-[[ -n "$AGENT_ID" && -n "$OUTPUT" ]] || exit 0
+LAST=$(jq -r '.last_assistant_message // empty'    <<<"$INPUT" 2>/dev/null)
+[[ -n "$AGENT_ID" ]] || exit 0
 # agent_type 為空代表這不是一次 subagent dispatch（主 session 的 Stop 也會走到
 # 這個事件），存下來只會污染 corpus
 [[ -n "$AGENT_TYPE" ]] || exit 0
@@ -36,14 +36,21 @@ OUTPUT=$(jq -r '.last_assistant_message // empty'  <<<"$INPUT" 2>/dev/null)
 # eval-judge 是標註用的 agent，判它自己會污染 corpus
 [[ "$AGENT_TYPE" == "eval-judge" ]] && exit 0
 
-# 當初的 dispatch prompt = subagent transcript 的第一則 user 訊息
-REQUEST=""
-if [[ -f "$TPATH" ]]; then
-  REQUEST=$(jq -rs '[.[] | select(.type=="user") | .message.content
-                     | if type=="string" then . else (map(select(.type=="text").text) | join("\n")) end][0] // ""' \
-            "$TPATH" 2>/dev/null | sed 's/<system-reminder>.*//')
+# dispatch prompt 與實際交回的報告都在 subagent transcript 裡。
+# `last_assistant_message` **不是**報告：subagent 用 SubagentHandback 把報告交回
+# caller，那個欄位只留下收尾句（實測大量是 `Report delivered.`，17 字元）。
+# 萃取邏輯與 archiver 共用 transcript.py，兩邊各寫一份 jq 正是這個 bug 的來源。
+EX=$(python3 "$R/transcript.py" "$TPATH" 2>/dev/null)
+REQUEST=$(jq -r '.request // ""'       <<<"$EX" 2>/dev/null)
+OUTPUT=$(jq -r '.report // ""'         <<<"$EX" 2>/dev/null)
+SOURCE=$(jq -r '.report_source // ""'  <<<"$EX" 2>/dev/null)
+# transcript.py 還沒部署、或 agent 沒走 handback 就結束：退回舊欄位，別把整筆丟掉。
+# corpus 記下 report_source，之後才分得出哪些列是完整報告、哪些只是收尾句。
+if [[ -z "$OUTPUT" ]]; then
+  OUTPUT="$LAST"
+  SOURCE="last_message"
 fi
-[[ -n "$REQUEST" ]] || exit 0
+[[ -n "$REQUEST" && -n "$OUTPUT" ]] || exit 0
 
 REQ=$(jq -n \
   --slurpfile q "$R/completeness_questions.json" \
@@ -65,11 +72,12 @@ jq -e '.answers' >/dev/null 2>&1 <<<"$RESP" || exit 0
 
 # flag：交給 Layer 2 真模型 judge 複查的條件
 jq -c --arg aid "$AGENT_ID" --arg at "$AGENT_TYPE" --arg s "$SESSION" --arg cwd "$CWD" \
-      --argjson ms "$((T1 - T0))" \
+      --argjson ms "$((T1 - T0))" --arg src "$SOURCE" \
       --arg req_chars "${#REQUEST}" --arg out_chars "${#OUTPUT}" \
   '{ts: (now|todate), agent_id: $aid, agent_type: $at, session_id: $s, cwd: $cwd,
     layer: 1,
     request_chars: ($req_chars|tonumber), output_chars: ($out_chars|tonumber),
+    report_source: $src,
     screen: .answers,
     jev_latency_ms: $ms,
     needs_layer2: (

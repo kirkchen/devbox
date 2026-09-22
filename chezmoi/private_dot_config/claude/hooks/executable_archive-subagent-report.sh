@@ -16,6 +16,7 @@ CONF="$HOME/.config/claude/typesafe.env"
 [[ -f "$CONF" ]] && . "$CONF"
 [[ "${ARCHIVE_SUBAGENT_REPORTS:-0}" == "1" ]] || exit 0
 
+R="${ROUTER_HOME:-$HOME/.config/claude/model-router}"
 DIR="${SUBAGENT_REPORT_DIR:-$HOME/.local/share/model-router-eval/reports}"
 mkdir -p "$DIR" 2>/dev/null || exit 0
 
@@ -29,23 +30,31 @@ AGENT_TYPE=$(jq -r '.agent_type // empty' <<<"$INPUT" 2>/dev/null)
 # eval-judge 是標註用的 agent，判它自己會污染 corpus
 [[ "$AGENT_TYPE" == "eval-judge" ]] && exit 0
 
-# 也把當初的 dispatch prompt 存下來：它在 subagent transcript 的第一則 user 訊息，
-# 而那個檔案 session 結束後會被清掉，事後撈不到。
+# 報告與當初的 dispatch prompt 都在 subagent transcript 裡，而那個檔案 session 結束
+# 後會被清掉，事後撈不到，所以要在這裡存下來。
+#
+# 報告**不是** `last_assistant_message`：subagent 用 SubagentHandback 把報告交回
+# caller，那個欄位只留下收尾句（實測大量是 `Report delivered.`，17 字元）。萃取邏輯
+# 與 judge hook 共用 transcript.py，兩邊各寫一份 jq 正是這個 bug 的來源。
 TPATH=$(jq -r '.agent_transcript_path // empty' <<<"$INPUT" 2>/dev/null)
-REQUEST=""
-if [[ -f "$TPATH" ]]; then
-  REQUEST=$(jq -rs '[.[] | select(.type=="user") | .message.content
-                     | if type=="string" then . else (map(select(.type=="text").text) | join("\n")) end][0] // ""' \
-            "$TPATH" 2>/dev/null | sed 's/<system-reminder>.*//')
+EX=$(python3 "$R/transcript.py" "$TPATH" 2>/dev/null)
+REQUEST=$(jq -r '.request // ""'      <<<"$EX" 2>/dev/null)
+REPORT=$(jq -r '.report // ""'        <<<"$EX" 2>/dev/null)
+SOURCE=$(jq -r '.report_source // ""' <<<"$EX" 2>/dev/null)
+# transcript.py 還沒部署、或 agent 沒走 handback 就結束：退回舊欄位，別把整筆丟掉。
+if [[ -z "$REPORT" ]]; then
+  REPORT=$(jq -r '.last_assistant_message // ""' <<<"$INPUT" 2>/dev/null)
+  SOURCE="last_message"
 fi
 
-jq -c --arg req "$REQUEST" '{
+jq -c --arg req "$REQUEST" --arg rep "$REPORT" --arg src "$SOURCE" '{
   agent_id, agent_type, session_id, cwd,
   ts: (now | todate),
   request: $req,
   request_chars: ($req | length),
-  report: (.last_assistant_message // ""),
-  report_chars: (.last_assistant_message // "" | length),
+  report: $rep,
+  report_chars: ($rep | length),
+  report_source: $src,
   agent_transcript_path
 }' <<<"$INPUT" > "$DIR/$AGENT_ID.json" 2>/dev/null || exit 0
 
