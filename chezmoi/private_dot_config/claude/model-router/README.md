@@ -9,7 +9,8 @@
 | `questions.json` | 送給 Jev 的問題定義。eval 跟 hook 共用，改這裡兩邊一起變 |
 | `policy.py` | Jev 答案 → tier 的決策邏輯，以及 fill/guard 模式判斷。唯一的決策實作 |
 | `outcomes.py` | 從 Claude Code transcript 收 subagent 執行結果，以 `tool_use_id` 為 key |
-| `review.py` | 覆盤：決策紀錄 ⋈ 實際結果 |
+| `review.py` | 覆盤：決策紀錄 ⋈ 實際結果 ⋈ Layer 1 完成度 |
+| `screening.py` | 讀 corpus，把路由決策按「有沒有改過模型」分群比 Layer 1 分數 |
 | `run_eval.py` | 對標註好的 eval set 跑 Jev 計分 |
 | `transcript.py` | 從 subagent transcript 取 dispatch prompt 與 handback 報告。兩支 hook 共用的唯一萃取實作 |
 | `backfill_corpus.py` | 用真報告重評既有 corpus（合成 SubagentStop 餵給 hook，不另外實作評分） |
@@ -57,7 +58,7 @@ JUDGE_SUBAGENT_OUTPUT=1
 | `ROUTER_TIMEOUT` | `2.5`（秒） | `model-router.py` |
 | `ROUTER_PROJECTS` | `~/.claude/projects/*` | `tune.py` |
 | `SUBAGENT_REPORT_DIR` | `~/.local/share/model-router-eval/reports` | `archive-subagent-report.sh` |
-| `EVAL_CORPUS` | `~/.local/share/model-router-eval/corpus.jsonl` | `judge-subagent-output.sh` |
+| `EVAL_CORPUS` | `~/.local/share/model-router-eval/corpus.jsonl` | `judge-subagent-output.sh`、`screening.py` |
 | `EVAL_DIR` | `~/.local/share/model-router-eval` | `select_layer2.py`、`merge_layer2.py`、`tune.py`、`backfill_corpus.py` |
 | `CLAUDE_PROJECTS` | `~/.claude/projects` | `backfill_corpus.py`（找 subagent transcript） |
 
@@ -126,7 +127,19 @@ Jev 失敗時 `error` 填原因、`model_applied` 為 `null`，dispatch 照原�
 ~/.config/claude/model-router/review.py --since 2026-09-20
 ```
 
-輸出：決策分布、Jev 延遲、實際生效的改動（對照同層歷史 tool_uses 中位數）、需要人工看的案例。
+輸出：決策分布、Jev 延遲、實際生效的改動（對照同層歷史 tool_uses 中位數）、需要人工看的案例，
+以及產出完成度。
+
+`--corpus` 指到別的 corpus 可以換一批 Layer 1 分數；corpus 不存在時那一節會說接不到，不會壞掉。
+
+### 產出完成度那一節在說什麼
+
+tool_uses 只答得出「跑了幾輪」，答不出「產出有沒有比較差」。這一節把決策按
+「router 有沒有實際改掉模型」分兩群，各自看 Layer 1 四題的中位數。
+
+**它是敘述不是證據，報表自己會把這句話印出來。** 兩個理由：router 專挑它判斷簡單的任務
+降級，兩群難度本來就不同——差異為零可能代表降級沒害處，也可能代表它只降級了本來就簡單的；
+而且 Layer 1 是 Jev 判 Jev 自己的結果，有循環性。要下結論得走 Layer 2 盲標加人工基準。
 
 判定「改壞了」的兩個自動訊號：
 - **需返工** — 某個 `Implement Task N` 之後出現 `Re-review Task N fix round`，代表產出沒過 review

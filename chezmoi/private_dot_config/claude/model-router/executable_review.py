@@ -8,13 +8,15 @@
 """
 import json, os, sys, argparse, statistics, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import outcomes, policy
+import outcomes, policy, screening
 
 DEFAULT_LOG = os.path.expanduser("~/.config/claude/model-router/decisions.jsonl")
 ap = argparse.ArgumentParser()
 ap.add_argument("--log", default=DEFAULT_LOG)
 ap.add_argument("--projects", default="~/.claude/projects/*")
 ap.add_argument("--since")
+ap.add_argument("--corpus", default=screening.DEFAULT_CORPUS,
+                help="Layer 1 完成度分數（corpus.jsonl）")
 args = ap.parse_args()
 
 if not os.path.exists(args.log):
@@ -94,6 +96,11 @@ for d in flag:
           f"conf={d.get('pred_conf',0):.2f}")
 if not flag:
     print("  無")
+
+# Layer 1 產出品質：turns 只答得出「跑了幾輪」，答不出「產出有沒有比較差」。
+print("\n--- 產出完成度（Layer 1）---")
+for line in screening.describe(screening.compare(dec, screening.load_corpus(args.corpus))):
+    print(line)
 
 shadow = [d for d in dec if d.get("mode") == "shadow" and d.get("action", "").startswith(("fill", "guard"))]
 if shadow:
