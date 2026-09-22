@@ -66,6 +66,48 @@ def _valid_chunks(d, skip_counter=None):
     return out
 
 
+def _is_token_char(ch):
+    """distinctive token 合法會包含字母、數字、`_`、`-`、`.`、`/`（檔案
+    路徑、識別字、錯誤字串常見），所以 Python 的 `\\b`（只認字母數字／
+    底線的邊界）是錯的工具——用它會把 `main.py` 這種 token 從中間的
+    `.` 切斷。邊界自己判斷：只要不是這些字元，就不可能是同一個 token
+    的延伸。"""
+    return ch.isalnum() or ch in "_-./"
+
+
+def _count_token_occurrences(token, text):
+    """token 在 text 裡『整個 token』出現幾次，不是子字串出現幾次。
+
+    單純的 `text.count(token)` 是子字串比對：token `"main"`會在
+    `"we remain in the domain of maintenance"` 裡數到三次（remain／
+    domain／maintenance 各吃一次），全部都是巧合、不是真的複述。
+    silent_miss 是整個專案唯一在對抗的指標，灌水的巧合命中會把門檻
+    往『什麼都不刪』的方向調，工具看起來還在跑、其實已經沒用（見
+    task-9 fix-round 1）。
+
+    邊界規則：token 前一個字元跟後一個字元都不能是「可能屬於 token
+    的字元」（見 _is_token_char），字串開頭／結尾本身算邊界。逐一用
+    `str.find` 找候選位置、每個都驗證前後邊界，一次只前進一個字元，
+    不會漏掉緊鄰彼此的兩個合法出現。"""
+    if not token:
+        return 0
+    count = 0
+    start = 0
+    tlen = len(token)
+    tail = len(text)
+    while True:
+        idx = text.find(token, start)
+        if idx == -1:
+            break
+        before_ok = idx == 0 or not _is_token_char(text[idx - 1])
+        after = idx + tlen
+        after_ok = after >= tail or not _is_token_char(text[after])
+        if before_ok and after_ok:
+            count += 1
+        start = idx + 1
+    return count
+
+
 def classify(decisions, restores, later_text_by_decision, skip_counter=None):
     """每個「被刪」的段落分成三態。restored 用精確比對（handle 有沒有
     出現在 restores），且贏過詞比對——同一個 handle 兩者都成立時判
@@ -111,8 +153,12 @@ def classify(decisions, restores, later_text_by_decision, skip_counter=None):
                 # 種類數」——只有一個獨有詞、但那個詞後來被複述兩次，一樣
                 # 算兩次命中。若改成只數「有沒有出現過」（每個詞最多算 1
                 # 次），單一獨有詞的段落無論後面重複幾次都拿不到第 2 次
-                # 命中，MIN_HITS=2 的門檻對這類段落永遠打不開。
-                hits = sum(later.count(t) for t in dist if isinstance(t, str) and t)
+                # 命中，MIN_HITS=2 的門檻對這類段落永遠打不開。用
+                # _count_token_occurrences 而不是 str.count：後者是子
+                # 字串比對，`main` 會被 `remain`／`domain`／`maintenance`
+                # 巧合命中三次（task-9 fix-round 1）。
+                hits = sum(_count_token_occurrences(t, later)
+                          for t in dist if isinstance(t, str) and t)
                 state = "silent_miss" if hits >= MIN_HITS else "clean"
             rows.append({"handle": handle, "decision_id": decision_id,
                          "tool": tool, "chars": chars,
@@ -134,14 +180,27 @@ def _row_ts_ms(ts_str):
     跟 decision["ts_ms"]（store.now_ms()，epoch 毫秒）同單位，才能比較
     先後。格式不對、缺欄位都回 None——呼叫端把 None 當成『排不進時間軸，
     不算後來』，不是預設放行（見 transcript_after 的說明：預設放行正是
-    這支工具原本會把整份 transcript 都算成『後來』的那個坑）。"""
+    這支工具原本會把整份 transcript 都算成『後來』的那個坑）。
+
+    沒有時區資訊的 timestamp（naive）一樣回 None，不是解析成功後直接
+    呼叫 .timestamp()——naive datetime 的 .timestamp() 會假設它是「本機
+    時區」，同一份 transcript 在不同時區的機器上跑出不同的 epoch ms、
+    進而跑出不同的 silent_miss 判定，而且這個錯不會被 except 擋下來
+    （fromisoformat 對 naive 字串解析成功，不丟例外）——這是比『格式
+    不對，排除』更危險的一種錯，因為它悄悄給了一個看似合理、方向卻
+    隨執行環境改變的數字。真實 transcript 一律帶 Z，這裡保守處理：
+    沒有時區就當成不可解析，跟缺欄位／格式錯誤同一個下場（task-9
+    fix-round 1）。"""
     if not isinstance(ts_str, str) or not ts_str:
         return None
+    s = ts_str[:-1] + "+00:00" if ts_str.endswith("Z") else ts_str
     try:
-        s = ts_str[:-1] + "+00:00" if ts_str.endswith("Z") else ts_str
-        return datetime.fromisoformat(s).timestamp() * 1000
+        dt = datetime.fromisoformat(s)
     except Exception:
         return None
+    if dt.tzinfo is None:
+        return None
+    return dt.timestamp() * 1000
 
 
 def transcript_after(decision_id, decisions_by_id, transcript_dir=None):

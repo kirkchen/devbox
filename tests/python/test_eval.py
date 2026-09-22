@@ -563,6 +563,57 @@ class TestClassify(unittest.TestCase):
         self.assertAlmostEqual(s["silent_miss_rate"], 1 / 3)
 
 
+class TestHitCountingRespectsTokenBoundaries(unittest.TestCase):
+    """獨有詞比對如果是純子字串比對，`main` 會被 `remain`／`domain`／
+    `maintenance` 巧合命中三次——silent_miss 是整個專案唯一在對抗的
+    指標，灌水的巧合命中會把門檻往『什麼都不刪』的方向調，工具看起來
+    還在跑、其實已經沒用（task-9 fix-round 1，coordinator review
+    Important 1）。token 合法會帶 `_`、`-`、`.`、`/`（檔案路徑、識別字、
+    錯誤字串常見），所以邊界不能用 `\\b`（只認字母數字／底線），要自己
+    判斷『前後字元是不是也可能屬於同一個 token』。"""
+
+    def test_coincidental_substring_inside_longer_words_scores_zero(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences(
+                "main", "we remain in the domain of maintenance"),
+            0)
+
+    def test_path_like_token_with_dots_and_slash_counts_each_occurrence(self):
+        text = "first saw it in src/main.py then again in src/main.py later"
+        self.assertEqual(tr_eval._count_token_occurrences("src/main.py", text), 2)
+
+    def test_token_at_very_start_and_very_end_both_count(self):
+        text = "alpha in the middle somewhere ends with alpha"
+        self.assertTrue(text.startswith("alpha") and text.endswith("alpha"))
+        self.assertEqual(tr_eval._count_token_occurrences("alpha", text), 2)
+
+    def test_token_followed_by_punctuation_not_part_of_it_counts(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences("main.py", "see main.py, then main.py)"),
+            2)
+
+    def test_classify_does_not_manufacture_silent_miss_from_coincidental_prose(self):
+        # 端對端 before/after 案例：distinctive token 是 "main"，later text
+        # 只有 remain／domain／maintenance 這種巧合子字串，子字串比對會數到
+        # 3 次（>= MIN_HITS），但 token 邊界比對是 0 次——必須是 clean。
+        decisions = [{"decision_id": "d9", "tool": "Bash",
+                     "chunks": [{"i": 0, "chars": 10, "dropped": True,
+                                "distinctive": ["main"]}]}]
+        later = {"d9": "we remain in the domain of maintenance"}
+        rows = tr_eval.classify(decisions, [], later)
+        self.assertEqual(rows[0]["state"], "clean")
+
+    def test_classify_still_detects_a_genuinely_repeated_token(self):
+        # 對照組：同一個 token，這次是兩次真的獨立出現（前後都是空白邊界）
+        # ——確保邊界判斷沒有矯枉過正到連真的複述都偵測不到。
+        decisions = [{"decision_id": "d9", "tool": "Bash",
+                     "chunks": [{"i": 0, "chars": 10, "dropped": True,
+                                "distinctive": ["main"]}]}]
+        later = {"d9": "check main again, still main here"}
+        rows = tr_eval.classify(decisions, [], later)
+        self.assertEqual(rows[0]["state"], "silent_miss")
+
+
 class TestBothViaValuesCountTheSame(unittest.TestCase):
     """restores.jsonl 的 via 只是『怎麼還原的』，不是兩種不同事件
     （task-9 correction 4）——tr-restore／direct-read 都要判成 restored，
@@ -738,6 +789,61 @@ class TestTranscriptAfter(unittest.TestCase):
         self.assertEqual(tr_eval.transcript_after("d1", by_id, transcript_dir="/tmp"), "")
 
 
+class TestTranscriptAfterTimezoneHandling(unittest.TestCase):
+    """真實 transcript 一律帶 `Z`，但 transcript_after 讀的是別人寫的檔案，
+    不能假設每一行都乖乖照這個格式來——沒有時區資訊的 timestamp（naive）
+    要當成不可解析而排除，不是靠 datetime.timestamp() 偷偷假設成『執行
+    這支工具的機器所在時區』。這種錯不會拋例外，之前的 except Exception
+    擋不住，是一個看起來正常、其實方向隨執行環境改變的數字（task-9
+    fix-round 1，coordinator review Important 2）。"""
+
+    def test_naive_timestamp_is_excluded_not_shifted(self):
+        T = 1_700_000_000_000
+        with tempfile.TemporaryDirectory() as root:
+            # _iso() 回傳的字串固定以 "Z" 結尾；去掉它就變成沒有時區資訊
+            # 的 naive timestamp——數字上仍然落在 ts_ms 之後，但因為沒有
+            # 時區可判斷「之後」是相對哪個時區，必須整筆排除。
+            naive_ts = _iso(T + 5000)[:-1]
+            self.assertFalse(naive_ts.endswith("Z"))
+            _write_transcript(root, "proj1", "sess-naive", [
+                {"type": "user", "timestamp": naive_ts,
+                 "message": {"content": [{"type": "text", "text": "NAIVE_TOKEN"}]}},
+            ])
+            by_id = {"d1": {"session_id": "sess-naive", "ts_ms": T}}
+            text = tr_eval.transcript_after("d1", by_id, transcript_dir=root)
+        self.assertNotIn("NAIVE_TOKEN", text)
+
+    def test_explicit_non_utc_offset_is_converted_not_dropped(self):
+        from datetime import datetime, timezone, timedelta
+        T = 1_700_000_000_000
+        # T + 5000ms in UTC，改用明確的 +08:00 位移表示（不是 Z）——必須
+        # 正確換算成同一個 UTC 時間點、被認出「在 ts_ms 之後」，不能因為
+        # 它不是 Z 結尾就被當成不可解析而丟掉。
+        dt_utc = datetime.fromtimestamp((T + 5000) / 1000.0, tz=timezone.utc)
+        offset_ts = dt_utc.astimezone(timezone(timedelta(hours=8))) \
+                          .isoformat(timespec="milliseconds")
+        self.assertTrue(offset_ts.endswith("+08:00"))
+        with tempfile.TemporaryDirectory() as root:
+            _write_transcript(root, "proj1", "sess-offset", [
+                {"type": "user", "timestamp": offset_ts,
+                 "message": {"content": [{"type": "text", "text": "OFFSET_TOKEN"}]}},
+            ])
+            by_id = {"d1": {"session_id": "sess-offset", "ts_ms": T}}
+            text = tr_eval.transcript_after("d1", by_id, transcript_dir=root)
+        self.assertIn("OFFSET_TOKEN", text)
+
+    def test_row_ts_ms_rejects_naive_string_directly(self):
+        self.assertIsNone(tr_eval._row_ts_ms("2026-09-21T04:32:27.142"))
+
+    def test_row_ts_ms_converts_non_utc_offset_to_the_same_instant_as_z(self):
+        # 2026-09-21T12:32:27+08:00 跟 2026-09-21T04:32:27Z 是同一個瞬間。
+        ms_offset = tr_eval._row_ts_ms("2026-09-21T12:32:27+08:00")
+        ms_utc = tr_eval._row_ts_ms("2026-09-21T04:32:27Z")
+        self.assertIsNotNone(ms_offset)
+        self.assertIsNotNone(ms_utc)
+        self.assertAlmostEqual(ms_offset, ms_utc, delta=1)
+
+
 class TestBuildBatchDeterminism(unittest.TestCase):
     """control 對照組用 handle 的 sha256 決定要不要收，不是 Python 內建
     hash()（受 PYTHONHASHSEED 影響、同一支程式兩次啟動可能不同）——重跑、
@@ -855,11 +961,18 @@ class TestBuildBatchDeterminism(unittest.TestCase):
         self.assertEqual(n, 0)
 
 
-class TestStoreRootResolvedFreshEachCall(unittest.TestCase):
+class TestEvalStoreRootResolvedFreshEachCall(unittest.TestCase):
     """main() 走 store.root()，且每次執行都重新解析，不能在模組載入當下
     凍結成常數——這正是本專案先前真的撞過的 bug 形狀（task-9 correction 2）。
     這裡不 mock，直接讓兩次呼叫在同一個 process 裡分別指向兩個不同的暫存
-    目錄，反向證明沒有任何地方把根目錄快取住。"""
+    目錄，反向證明沒有任何地方把根目錄快取住。
+
+    命名刻意跟前面 tr-stats 那個同名測試類別（TestStoreRootResolvedFreshEachCall）
+    區分開——兩個類別原本撞名，Python 對同一個模組裡重複定義的類別名稱
+    直接靜默覆寫，後定義的整個蓋掉先定義的，先定義那個的測試方法從此
+    再也不會被 unittest 收集到、也不會有任何錯誤或警告訊息。這是 fix-round 1
+    自我複查時另外抓到的（不是 coordinator 這輪點名的兩個問題），順手一併
+    修掉，見 task-9-report.md。"""
 
     def test_module_level_constant_is_not_frozen_at_import(self):
         self.assertFalse(hasattr(tr_eval, "HOME"),
@@ -891,11 +1004,12 @@ class TestStoreRootResolvedFreshEachCall(unittest.TestCase):
         self.assertIn("墓碑 0 個", out_b)
 
 
-class TestFreshOrAbsentStoreDoesNotCrash(unittest.TestCase):
+class TestEvalFreshOrAbsentStoreDoesNotCrash(unittest.TestCase):
     """全新安裝、還沒發生過任何一次 reduce 的環境——連存放區根目錄都不
     存在——tr-eval 必須印出全 0，不是 traceback（task-9 global constraint）。
     走 subprocess 驗證連 main() 之外、argparse／print 那段實際印出來的東西
-    也一起驗證到。"""
+    也一起驗證到。命名跟 tr-stats 那個同名類別區分開，理由見
+    TestEvalStoreRootResolvedFreshEachCall 的說明。"""
 
     def _run(self, home, extra_args=(), transcript_dir=None):
         env = dict(os.environ, TOOL_REDUCE_HOME=home,
