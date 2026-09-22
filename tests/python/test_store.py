@@ -91,5 +91,79 @@ class TestScrub(unittest.TestCase):
         self.assertEqual(out, [])
 
 
+
+
+class TestSessionIdContainment(unittest.TestCase):
+    """M1：存放區裡每一個「拿外來字串組路徑」的地方都先驗證再組 —— 除了
+    真正寫檔案的那一端。`Store("../escaped-session")` 會寫到存放區外面，
+    `Store("/tmp/absolute")` 會寫到 /tmp（os.path.join 碰到絕對路徑會整段
+    丟掉前面的 root）。session_id 今天來自 harness 的 UUID，不是攻擊者
+    控制的，所以這不是現成的攻擊路徑；但它是這條不變量在整個模組裡唯一
+    的缺口，而缺口在寫入端比在讀取端更貴。"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+
+    def test_traversal_session_id_is_rejected(self):
+        with self.assertRaises(ValueError):
+            store.Store("../escaped-session", root=self.root)
+
+    def test_absolute_session_id_is_rejected(self):
+        with self.assertRaises(ValueError):
+            store.Store("/tmp/absolute", root=self.root)
+
+    def test_nested_session_id_is_rejected(self):
+        with self.assertRaises(ValueError):
+            store.Store("a/b", root=self.root)
+
+    def test_empty_and_non_string_session_ids_are_rejected(self):
+        for bad in ("", None, 3, b"sess"):
+            with self.assertRaises(ValueError):
+                store.Store(bad, root=self.root)
+
+    def test_archive_is_not_a_usable_session_id(self):
+        """封存區只存紀錄、不存原文，而且永遠不會被清掉。一個叫 archive
+        的 session 會把可能帶密鑰的段落原文寫進去。"""
+        with self.assertRaises(ValueError):
+            store.Store("archive", root=self.root)
+
+    def test_ordinary_session_ids_still_work(self):
+        for good in ("sess-1", "unknown", "ac09f1da-7b9f-49ae-93c7-413e44ac698e"):
+            s = store.Store(good, root=self.root)
+            self.assertEqual(os.path.dirname(s.path), os.path.abspath(self.root))
+
+
+class TestSaveChunkIsAtomic(unittest.TestCase):
+    """I6 的一半：open(p,"w") 先截斷再寫，寫到一半失敗會留下一個零位元組
+    的 `<handle>.txt`。那個檔案存在、load_chunk 讀得到、回傳空字串 ——
+    一個指向空氣的墓碑，直接打穿「刪掉的東西一定救得回來」。"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.s = store.Store("sess-atomic", root=self.root)
+
+    def test_encode_failure_leaves_no_truncated_file(self):
+        with self.assertRaises(UnicodeEncodeError):
+            self.s.save_chunk("d1.1", "text with a lone surrogate \ud800 in it")
+        self.assertFalse(os.path.exists(os.path.join(self.s.path, "d1.1.txt")))
+        self.assertIsNone(self.s.load_chunk("d1.1"))
+
+    def test_failed_overwrite_leaves_the_previous_content_intact(self):
+        self.s.save_chunk("d1.2", "the original text")
+        with self.assertRaises(UnicodeEncodeError):
+            self.s.save_chunk("d1.2", "\ud800")
+        self.assertEqual(self.s.load_chunk("d1.2"), "the original text")
+
+    def test_no_temp_files_are_left_behind_on_failure(self):
+        with self.assertRaises(UnicodeEncodeError):
+            self.s.save_chunk("d1.3", "\ud800")
+        self.assertEqual([n for n in os.listdir(self.s.path) if n.endswith(".tmp")], [])
+
+    def test_saved_chunk_is_still_private(self):
+        self.s.save_chunk("d1.4", "x")
+        mode = stat.S_IMODE(os.stat(os.path.join(self.s.path, "d1.4.txt")).st_mode)
+        self.assertEqual(mode, 0o600)
+
+
 if __name__ == "__main__":
     unittest.main()

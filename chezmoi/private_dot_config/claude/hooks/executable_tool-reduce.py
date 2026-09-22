@@ -25,9 +25,31 @@ import jev
 import shapes
 import store
 
-SIZE_GATE = int(os.environ.get("TOOL_REDUCE_SIZE_GATE", "2000"))
-TIMEOUT = float(os.environ.get("TOOL_REDUCE_TIMEOUT", "2.5"))
-MAX_CHUNKS = int(os.environ.get("TOOL_REDUCE_MAX_CHUNKS", "16"))
+SIZE_GATE_DEFAULT = 2000
+TIMEOUT_DEFAULT = 2.5
+MAX_CHUNKS_DEFAULT = 16
+
+
+def _env_num(name, default, cast):
+    """讀一個數字型的環境變數旋鈕，讀不出數字就退回預設值。
+
+    這三個旋鈕（TOOL_REDUCE_SIZE_GATE／TIMEOUT／MAX_CHUNKS）以前是模組層級
+    的 `int(os.environ.get(...))`，跑在 import 時、也就是 main() 的 try 之外
+    —— `TOOL_REDUCE_SIZE_GATE=2k` 這種手打錯誤會讓 ValueError 在 main() 還沒
+    開始就逸出，hook 非零結束、印出帶部署路徑的 traceback，而且是這個
+    session 裡「每一次工具呼叫」都如此。這些是 README 明列、要人手動編輯
+    typesafe.env 才會生效的旋鈕，手打錯誤是預期中的輸入，不是例外狀況。
+    main() 裡面的每一步都已經 fail-open，這是唯一的逃逸口。
+
+    順帶一個跟 store.root()／_store_root_real() 一致的性質：每次呼叫才讀
+    環境變數，不在模組載入當下凍結成常數。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def _store_root_real():
@@ -168,17 +190,22 @@ def has_persisted_output(tool_response):
 
 def reduce_payload(ev, asker=None, st=None):
     """回傳要印出去的 hook 輸出；不該改就回 None。"""
-    if os.environ.get("TOOL_REDUCE_MODE") not in ("shadow", "full"):
+    mode = os.environ.get("TOOL_REDUCE_MODE")
+    if mode not in ("shadow", "full"):
         return None
     tool = ev.get("tool_name") or ""
     tool_response = ev.get("tool_response")
     if has_persisted_output(tool_response):
         return None
     text = shapes.extract(tool, tool_response)
-    if not text or len(text) < SIZE_GATE or is_restore_call(ev):
+    if not text or len(text) < _env_num("TOOL_REDUCE_SIZE_GATE",
+                                        SIZE_GATE_DEFAULT, int):
+        return None
+    if is_restore_call(ev):
         return None
 
-    chunks, kind = chunker.chunk(text, max_chunks=MAX_CHUNKS)
+    chunks, kind = chunker.chunk(
+        text, max_chunks=_env_num("TOOL_REDUCE_MAX_CHUNKS", MAX_CHUNKS_DEFAULT, int))
     if len(chunks) < drop_policy.DEFAULTS["min_chunks"]:
         return None
 
@@ -187,7 +214,8 @@ def reduce_payload(ev, asker=None, st=None):
         answers = ask({"tool": tool,
                        "tool_input": ev.get("tool_input") or {},
                        "chunks": {f"c{i}": c for i, c in enumerate(chunks)}},
-                      jev.build_questions(len(chunks)), timeout=TIMEOUT)
+                      jev.build_questions(len(chunks)),
+                      timeout=_env_num("TOOL_REDUCE_TIMEOUT", TIMEOUT_DEFAULT, float))
     except Exception:
         return None
 
@@ -207,7 +235,21 @@ def reduce_payload(ev, asker=None, st=None):
         (session + tool + text[:200] + str(store.now_ms())).encode() + os.urandom(4)
     ).hexdigest()[:10]
 
-    out_parts, rec_chunks, saved = [], [], 0
+    # 這個迴圈只算，不碰檔案系統、不寫任何紀錄。兩個理由：
+    #
+    # 1. 信封要先能組回去（見下面的 chunker.rewrap）。chunk() 回的是
+    #    payload 的切片，payload 對 `mcp:*` 信封來說是「裡面那個字串」，
+    #    不是整份 text；把 out_parts 直接當成整份輸出寫回去會把外層 JSON
+    #    物件、它其他的鍵、以及所有跳脫整個丟掉，而那個信封從來就不是一個
+    #    段落、沒被存進存放區，tr-restore 救不回來。組不回去就整份放行，
+    #    此時存放區裡一個位元組都還沒被寫過。
+    # 2. 墓碑紀錄會同時被附加寫進 archive/，而 archive/ 永遠不會被清掉。
+    #    邊算邊寫的話，迴圈中途失敗（例如某個中間段帶了單獨的 UTF-16
+    #    surrogate，json.loads 收得下、UTF-8 編碼會丟例外）會留下一批指向
+    #    「其實沒有真的發生的刪除」的孤兒墓碑紀錄，tr-stats 從此永久把那
+    #    幾百字元的墓碑成本算在零節省上。fail-open 有守住（輸出沒被改），
+    #    但紀錄已經髒了。先全部算完、算成功了才寫。
+    out_parts, rec_chunks, saved, pending = [], [], 0, []
     for i, (c, d) in enumerate(zip(chunks, drop)):
         others = [x for j, x in enumerate(chunks) if j != i]
         toks = store.scrub(descriptor.distinctive(c, others))
@@ -217,25 +259,40 @@ def reduce_payload(ev, asker=None, st=None):
             out_parts.append(c)
             continue
         handle = f"{decision_id}.{i}"
-        st.save_chunk(handle, c)
         marker = descriptor.make(c, handle)
         out_parts.append(("\n" if not c.startswith("\n") else "") + marker + "\n")
         saved += len(c) - len(marker)
-        st.record_tombstone({"handle": handle, "decision_id": decision_id,
-                             "chars": len(c), "descriptor": marker})
+        pending.append((handle, c,
+                        {"handle": handle, "decision_id": decision_id,
+                         "mode": mode, "chars": len(c), "descriptor": marker}))
 
+    new_text = chunker.rewrap(text, kind, "".join(out_parts))
+
+    # 落地順序：段落原文 -> 墓碑紀錄 -> 決策紀錄。墓碑一定在它指向的檔案
+    # 已經寫好之後才被記下來，「墓碑絕不指向空氣」這條不變量因此不依賴
+    # 迴圈有沒有跑完。
+    for handle, c, _rec in pending:
+        st.save_chunk(handle, c)
+    for _handle, _c, rec in pending:
+        st.record_tombstone(rec)
+
+    # mode 進紀錄：shadow 模式一樣會寫決策與墓碑紀錄（這是它的用途 ——
+    # 累積資料但不動 agent 看到的東西），紀錄本身卻沒有任何欄位能分辨
+    # 「這次真的刪了」跟「這次只是演練」。README 的上線流程就是先 shadow
+    # 再 full，兩種紀錄會混進同一份 append-only 的 archive/，三支離線工具
+    # 讀的都是它：shadow 的紀錄會讓 tr-stats 報出根本沒發生的節省，也會讓
+    # tr-eval 把「agent 明明看得到全文、自然會複述」算成沉默誤刪。
     st.record_decision({"decision_id": decision_id, "session_id": session,
-                        "tool": tool, "kind": kind,
-                        "chars_before": len(text), "chars_after": sum(map(len, out_parts)),
+                        "tool": tool, "kind": kind, "mode": mode,
+                        "chars_before": len(text), "chars_after": len(new_text),
                         "chars_saved": saved, "thresholds": thresholds,
                         "chunks": rec_chunks})
 
-    if os.environ.get("TOOL_REDUCE_MODE") == "shadow":
+    if mode == "shadow":
         return None
     return {"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
-        "updatedToolOutput": shapes.rewrite(tool, tool_response,
-                                            "".join(out_parts))}}
+        "updatedToolOutput": shapes.rewrite(tool, tool_response, new_text)}}
 
 
 def main():

@@ -3,10 +3,13 @@
 段落原文放 session 存放區（700，隨 session 清除）。紀錄同時寫一份到封存區供離線分析，
 封存區只存紀錄、不存原文 —— Layer 1 的比對改用獨有詞集合（見 descriptor.distinctive）。
 """
-import json, os, re, time
+import json, os, re, tempfile, time
 
 ROOT_DEFAULT = "~/.claude/tool-reduce"
 HANDLE_RE = re.compile(r"^[A-Za-z0-9]+\.\d+$")
+# session id 走跟 tr-stats --session 同一組字元（字母、數字、`_`、`-`），
+# 不含 `.` 或路徑分隔符。見 Store.__init__ 對 containment 的說明。
+SESSION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # 常見密鑰樣式。獨有詞集合可能夾帶金鑰片段（長 token 會被當識別字），封存前過濾掉。
 SECRET_RE = re.compile(
@@ -60,8 +63,27 @@ root = _resolve_root
 
 class Store:
     def __init__(self, session_id, root=None):
+        """session_id 的 containment 在這裡就擋住，不留給呼叫端。
+
+        存放區裡每一個「拿外來字串組路徑」的地方都先驗證再組：load_chunk
+        驗 handle、tr-guard 驗 handle、tr-stats 驗 --session、tr-cleanup.sh
+        驗 session id。唯一的例外是這裡 —— 真正寫檔案的那一端。
+        `Store("../escaped-session")` 會寫到存放區外面，`Store("/tmp/x")`
+        會寫到 /tmp（os.path.join 碰到絕對路徑會整段丟掉前面的 root）。
+        今天 session_id 來自 harness 的 UUID，不是攻擊者控制的，所以這不是
+        一條現成的攻擊路徑；但「路徑一律驗證」這條不變量在整個模組裡只有
+        這一個缺口，而缺口在寫入端比在讀取端更貴。
+
+        不合格就丟 ValueError：三個呼叫端（PostToolUse hook、tr-guard、
+        tr-restore）都在 try 裡面，fail-open 契約不受影響。"""
         self.root = (os.path.abspath(os.path.expanduser(root))
                      if root else _resolve_root())
+        # "archive" 另外擋掉：它字元集合合法，但封存區只存紀錄、不存原文
+        # （段落原文可能帶密鑰，archive/ 從不被清掉），一個叫 archive 的
+        # session 會把原文寫進去。
+        if (not isinstance(session_id, str) or not SESSION_RE.match(session_id)
+                or session_id == "archive"):
+            raise ValueError(f"invalid session id: {session_id!r}")
         self.path = os.path.join(self.root, session_id)
         self.archive = os.path.join(self.root, "archive")
 
@@ -73,16 +95,34 @@ class Store:
             pass
 
     def save_chunk(self, handle, text):
+        """段落原文落地。先寫同目錄的暫存檔再 os.replace，不直接 open(p,"w")。
+
+        open(p,"w") 會先截斷再寫：寫到一半失敗（例如 text 帶了單獨的
+        UTF-16 surrogate，UTF-8 編碼會丟 UnicodeEncodeError）會留下一個
+        零位元組的 `<handle>.txt`。那個檔案存在、load_chunk 讀得到、回傳
+        空字串 —— 一個指向空氣的墓碑，直接打穿「刪掉的東西一定救得回來」。
+        os.replace 在同一個檔案系統上是原子操作：要嘛沒有這個檔案，要嘛是
+        完整的內容，不存在中間狀態。（tr-tune 寫 thresholds.json 用的是
+        同一招。）"""
         if not HANDLE_RE.match(handle):
             return
         self._ensure(self.path)
         p = os.path.join(self.path, handle + ".txt")
-        with open(p, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        fd, tmp = tempfile.mkstemp(dir=self.path, prefix=".tr-", suffix=".tmp")
         try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, p)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     def load_chunk(self, handle):
         if not HANDLE_RE.match(handle):

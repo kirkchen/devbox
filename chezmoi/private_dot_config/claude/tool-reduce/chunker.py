@@ -167,6 +167,40 @@ def unwrap(text):
         return text, 'read'
     return text, 'raw'
 
+MCP_PREFIX = 'mcp:'
+
+def rewrap(text, kind, payload):
+    """The inverse of unwrap(): put a (possibly rewritten) payload back inside
+    the envelope `text` came in.
+
+    chunk() returns slices of `payload`, and for an `mcp:<key>` envelope the
+    payload is the *inner* string, not `text`. A caller that joins the chunks
+    back together and ships that as the whole tool result silently throws away
+    the outer JSON object, its other keys and all of its escaping - the model
+    is then handed something that no longer parses as what it asked for, and
+    the discarded envelope was never stored as a chunk, so nothing can bring
+    it back. Every caller that rewrites a tool result must route the joined
+    payload through here.
+
+    'raw' and 'read' envelopes are identities: unwrap() returned `text` itself
+    as the payload, so the rewritten payload is already the whole thing.
+
+    Raises ValueError when the envelope cannot be rebuilt (text no longer
+    parses, or `kind` does not describe it). Callers fail open on that - they
+    must not fall back to shipping the bare payload.
+    """
+    if not isinstance(kind, str) or not kind.startswith(MCP_PREFIX):
+        return payload
+    key = kind[len(MCP_PREFIX):]
+    try:
+        obj = json.loads(text.strip())
+    except Exception:
+        raise ValueError('envelope no longer parses as JSON') from None
+    if not isinstance(obj, dict) or not isinstance(obj.get(key), str):
+        raise ValueError('envelope does not carry the unwrapped key')
+    obj[key] = payload
+    return json.dumps(obj, ensure_ascii=False)
+
 def chunk(text, max_chunks=16, min_chars=300):
     payload, kind = unwrap(text)
     target = max(min_chars, len(payload) // max_chunks)

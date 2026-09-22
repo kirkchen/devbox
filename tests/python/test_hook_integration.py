@@ -1,5 +1,5 @@
 # tests/python/test_hook_integration.py
-import sys, os, io, re, json, tempfile, time, importlib.util, unittest
+import sys, os, io, re, json, subprocess, tempfile, time, importlib.util, unittest
 from unittest import mock
 
 BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -444,6 +444,243 @@ class TestMain(unittest.TestCase):
             code, out = self._run_main(payload)
         self.assertEqual(code, 0)
         self.assertEqual(out, "")
+
+
+
+
+# ---------------------------------------------------------------------------
+# final review C1 / I1 / I3 / I6
+# ---------------------------------------------------------------------------
+
+HOOK_PATH = os.path.join(
+    BASE, "chezmoi/private_dot_config/claude/hooks/executable_tool-reduce.py")
+
+# 墓碑標記的形狀（descriptor.make）：`[省略 N 行 · <首行摘要> · tr-restore <handle>]`
+MARKER_RE = re.compile(r"\[省略[^\n]*?tr-restore (\S+?)\]")
+
+
+def mcp_envelope(payload=None):
+    """一個 `mcp:*` 信封：外層是 JSON 物件，要過濾的文字在其中一個鍵裡。
+
+    chunker.unwrap() 對這種形狀會回傳「裡面那個字串」當 payload，kind 是
+    `mcp:log` —— chunk() 切的是 payload，不是整份 text。實測（最近 150 份
+    transcript）過了 size gate 的 1,740 筆結果裡有 55 筆（3.2%）走這條路，
+    而且正好是 10-21 KB 的大型結構化結果，也就是這個過濾器真正想處理的
+    那一類。"""
+    return json.dumps({"schemaVersion": 1, "log": payload or big_output()},
+                      ensure_ascii=False)
+
+
+def restore_every_marker(payload, st):
+    """把 payload 裡每個墓碑標記換回存放區裡的原文，重建原始 payload。
+
+    hook 寫出來的形狀是 `("\\n" if 原文不是以換行開頭 else "") + marker
+    + "\\n"`，這裡照著反推，才能驗到「逐字還原」而不只是「大致還原」。"""
+    out, pos = [], 0
+    for m in MARKER_RE.finditer(payload):
+        chunk = st.load_chunk(m.group(1))
+        assert chunk is not None, f"tombstone points at nothing: {m.group(1)}"
+        start, end = m.start(), m.end()
+        if payload[end:end + 1] == "\n":
+            end += 1
+        if not chunk.startswith("\n") and start > 0 and payload[start - 1] == "\n":
+            start -= 1
+        out.append(payload[pos:start])
+        out.append(chunk)
+        pos = end
+    out.append(payload[pos:])
+    return "".join(out)
+
+
+class TestMcpEnvelopeSurvivesFiltering(unittest.TestCase):
+    """C1：chunker.chunk() 回的是 payload 的切片，`mcp:*` 信封的 payload 是
+    「裡面那個字串」。hook 以前把 "".join(out_parts) 當成整份文字寫回去，
+    外層 JSON 物件、它其他的鍵、以及所有跳脫全部消失，模型拿到的不是「少
+    一點的內容」而是「錯的內容」—— 這是整輪 review 裡唯一一條會餵錯東西
+    給模型的路徑。而且那個信封從來不是一個段落、沒被存進存放區，
+    tr-restore 也救不回來。"""
+
+    def setUp(self):
+        os.environ["TOOL_REDUCE_MODE"] = "full"
+        self.root = tempfile.mkdtemp()
+        self.st = store.Store("sess-mcp", root=self.root)
+        self.text = mcp_envelope()
+        ev = {"tool_name": "Bash", "tool_response": {"stdout": self.text},
+              "session_id": "sess-mcp"}
+        self.out = hook.reduce_payload(ev, asker=DROP_MIDDLE, st=self.st)
+
+    def test_chunker_really_takes_the_envelope_peel_path(self):
+        _chunks, kind = hook.chunker.chunk(self.text)
+        self.assertEqual(kind, "mcp:log")
+
+    def test_filtered_result_still_parses_as_its_original_envelope(self):
+        self.assertIsNotNone(self.out)
+        stdout = self.out["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
+        obj = json.loads(stdout)                       # 舊版在這裡就炸了
+        self.assertEqual(obj["schemaVersion"], 1)      # 其他的鍵不能消失
+        self.assertEqual(set(obj), {"schemaVersion", "log"})
+        self.assertIn("tr-restore", obj["log"])        # 真的有過濾，不是原樣放行
+        self.assertLess(len(obj["log"]), len(json.loads(self.text)["log"]))
+
+    def test_restoring_every_tombstone_rebuilds_the_payload_byte_for_byte(self):
+        stdout = self.out["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
+        filtered_payload = json.loads(stdout)["log"]
+        self.assertTrue(MARKER_RE.search(filtered_payload), "expected tombstones")
+        self.assertEqual(restore_every_marker(filtered_payload, self.st),
+                         json.loads(self.text)["log"])
+
+    def test_broken_envelope_fails_open_instead_of_shipping_the_bare_payload(self):
+        """rewrap 組不回信封時（kind 描述不了這份 text）要整份放行，不能
+        退而求其次把裸 payload 送出去 —— 那正是 C1 的失效模式本身。"""
+        with self.assertRaises(ValueError):
+            hook.chunker.rewrap('{"log": 1}', "mcp:log", "x")
+        with self.assertRaises(ValueError):
+            hook.chunker.rewrap("not json", "mcp:log", "x")
+
+    def test_raw_and_read_envelopes_are_identities(self):
+        self.assertEqual(hook.chunker.rewrap("abc", "raw", "xyz"), "xyz")
+        self.assertEqual(hook.chunker.rewrap("abc", "read", "xyz"), "xyz")
+
+
+class TestModeIsOnTheRecord(unittest.TestCase):
+    """I3：record_decision／record_tombstone 都跑在 `if mode == "shadow":
+    return None` 之前，紀錄本身卻沒有任何欄位能分辨「真的刪了」跟「只是
+    演練」。README 的上線流程就是先 shadow 再 full，兩種紀錄會混進同一份
+    append-only 的 archive/，三支離線工具讀的都是它。"""
+
+    def _record(self, mode, session):
+        os.environ["TOOL_REDUCE_MODE"] = mode
+        root = tempfile.mkdtemp()
+        st = store.Store(session, root=root)
+        ev = {"tool_name": "Bash", "tool_response": {"stdout": big_output()},
+              "session_id": session}
+        hook.reduce_payload(ev, asker=DROP_MIDDLE, st=st)
+        with open(os.path.join(st.path, "decisions.jsonl"), encoding="utf-8") as fh:
+            decision = json.loads(fh.readline())
+        with open(os.path.join(st.path, "tombstones.jsonl"), encoding="utf-8") as fh:
+            tombstone = json.loads(fh.readline())
+        return decision, tombstone
+
+    def test_shadow_records_are_labelled_shadow(self):
+        decision, tombstone = self._record("shadow", "sess-mode-shadow")
+        self.assertEqual(decision["mode"], "shadow")
+        self.assertEqual(tombstone["mode"], "shadow")
+
+    def test_full_records_are_labelled_full(self):
+        decision, tombstone = self._record("full", "sess-mode-full")
+        self.assertEqual(decision["mode"], "full")
+        self.assertEqual(tombstone["mode"], "full")
+
+
+def big_output_with_surrogate_in_the_middle():
+    """把沒配對的 surrogate 放進一個「會被刪掉」的中間段，讓 save_chunk 在
+    迴圈中途丟 UnicodeEncodeError —— 不是放尾端錨點段（那個永遠不會被刪，
+    失敗點落在 print()，測的是另一件事）。"""
+    return big_output().replace("## Section 5\n", "## Section 5\n" + LONE_SURROGATE, 1)
+
+
+class TestMidLoopFailureLeavesNoOrphanRecords(unittest.TestCase):
+    """I6：墓碑紀錄會同時被附加寫進 archive/，而 archive/ 永遠不會被清掉
+    （tr-cleanup.sh 刻意不碰它，7 天掃除也排除它）。以前是邊算邊寫：迴圈
+    中途失敗會留下一批指向「其實沒有發生的刪除」的孤兒墓碑紀錄，加上一個
+    被 open(p,"w") 截斷成零位元組的段落檔案，而決策紀錄根本沒寫成。
+    fail-open 有守住（輸出沒被改）、紀錄卻永久髒掉：tr-stats 從此把那幾百
+    字元的墓碑成本算在零節省上。"""
+
+    def setUp(self):
+        os.environ["TOOL_REDUCE_MODE"] = "full"
+        self.root = tempfile.mkdtemp()
+        self.st = store.Store("sess-orphan", root=self.root)
+
+    def _run(self):
+        ev = {"tool_name": "Bash",
+              "tool_response": {"stdout": big_output_with_surrogate_in_the_middle()},
+              "session_id": "sess-orphan"}
+        with self.assertRaises(UnicodeEncodeError):
+            hook.reduce_payload(ev, asker=DROP_MIDDLE, st=self.st)
+
+    def test_no_tombstone_record_lands_in_the_permanent_archive(self):
+        self._run()
+        for d in (self.st.path, self.st.archive):
+            self.assertFalse(os.path.exists(os.path.join(d, "tombstones.jsonl")),
+                             f"orphan tombstone records under {d}")
+            self.assertFalse(os.path.exists(os.path.join(d, "decisions.jsonl")))
+
+    def test_no_truncated_zero_byte_chunk_file_is_left_behind(self):
+        self._run()
+        if not os.path.isdir(self.st.path):
+            return
+        for name in os.listdir(self.st.path):
+            if name.endswith(".txt"):
+                p = os.path.join(self.st.path, name)
+                self.assertGreater(os.path.getsize(p), 0,
+                                   f"{name} is a tombstone pointing at nothing")
+
+    def test_main_still_fails_open(self):
+        ev = {"tool_name": "Bash",
+              "tool_response": {"stdout": big_output_with_surrogate_in_the_middle()},
+              "session_id": "sess-orphan-main"}
+        buf = io.BytesIO()
+        wrapper = io.TextIOWrapper(buf, encoding="utf-8", newline="\n")
+        old_home = os.environ.get("TOOL_REDUCE_HOME")
+        os.environ["TOOL_REDUCE_HOME"] = self.root
+        try:
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(ev))), \
+                 mock.patch.object(sys, "stdout", wrapper), \
+                 mock.patch.object(hook.jev, "ask", DROP_MIDDLE):
+                with self.assertRaises(SystemExit) as cm:
+                    hook.main()
+            wrapper.flush()
+        finally:
+            if old_home is None:
+                os.environ.pop("TOOL_REDUCE_HOME", None)
+            else:
+                os.environ["TOOL_REDUCE_HOME"] = old_home
+        self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(buf.getvalue().decode("utf-8", "replace"), "")
+
+
+class TestEnvKnobsAreParsedInsideTheGuardedPath(unittest.TestCase):
+    """I1：SIZE_GATE／TIMEOUT／MAX_CHUNKS 以前在模組層級解析，跑在 import
+    時、也就是 main() 的 try 之外。`TOOL_REDUCE_SIZE_GATE=2k` 這種手打錯誤
+    會讓 hook 在這個 session 的「每一次工具呼叫」都非零結束、印出帶部署
+    路徑的 traceback。這些是 README 明列、要人手編輯 typesafe.env 的旋鈕。
+
+    走 subprocess，因為要測的正是「模組載入本身」會不會炸 —— 在同一個
+    行程裡重用已經載入好的模組測不到那件事。"""
+
+    def _run(self, env_overrides, stdin_text):
+        env = dict(os.environ, TOOL_REDUCE_LIB=LIB,
+                   TOOL_REDUCE_HOME=tempfile.mkdtemp(), TOOL_REDUCE_MODE="full")
+        env.update(env_overrides)
+        return subprocess.run([sys.executable, HOOK_PATH], input=stdin_text,
+                              capture_output=True, text=True, env=env)
+
+    def test_unparseable_size_gate_is_fail_open(self):
+        ev = json.dumps({"tool_name": "Bash", "tool_response": {"stdout": "tiny"},
+                         "session_id": "s"})
+        r = self._run({"TOOL_REDUCE_SIZE_GATE": "2k"}, ev)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(r.stderr, "")
+
+    def test_unparseable_timeout_and_max_chunks_are_fail_open(self):
+        ev = json.dumps({"tool_name": "Bash", "tool_response": {"stdout": "tiny"},
+                         "session_id": "s"})
+        r = self._run({"TOOL_REDUCE_TIMEOUT": "fast",
+                       "TOOL_REDUCE_MAX_CHUNKS": ""}, ev)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "")
+
+    def test_a_valid_override_is_still_honoured(self):
+        """退回預設值不能變成「忽略這個旋鈕」—— 合法的值要照用。"""
+        gate = len(big_output()) + 1000
+        ev = json.dumps({"tool_name": "Bash", "tool_response": {"stdout": big_output()},
+                         "session_id": "s"})
+        r = self._run({"TOOL_REDUCE_SIZE_GATE": str(gate)}, ev)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")      # 被自訂的 size gate 擋下來，不判斷
 
 
 if __name__ == "__main__":
