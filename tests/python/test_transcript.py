@@ -93,6 +93,44 @@ class TestHandbackReport(unittest.TestCase):
             transcript.handback_report(os.path.join(self.tmp.name, "nope.jsonl")), "")
 
 
+class TestHandbackPositions(unittest.TestCase):
+    """回填要重現「每一次交回當下」的 transcript 狀態，所以需要每個 handback 的位置。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_returns_the_record_index_of_each_handback(self):
+        path = _write_transcript(self.tmp.name, [
+            _rec("user", [{"type": "text", "text": "go"}]),
+            _rec("assistant", [{"type": "tool_use", "name": "SubagentHandback",
+                               "input": {"message": "first"}}]),
+            _rec("assistant", [{"type": "text", "text": "Report delivered."}]),
+            _rec("assistant", [{"type": "tool_use", "name": "SubagentHandback",
+                               "input": {"message": "second"}}]),
+        ])
+        self.assertEqual(transcript.handback_positions(path), [1, 3])
+
+    def test_returns_empty_when_the_agent_never_handed_back(self):
+        path = _write_transcript(self.tmp.name, [
+            _rec("user", [{"type": "text", "text": "go"}]),
+        ])
+        self.assertEqual(transcript.handback_positions(path), [])
+
+    def test_counts_malformed_lines_so_the_index_still_addresses_the_right_record(self):
+        path = os.path.join(self.tmp.name, "broken.jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{not json\n")
+            fh.write(json.dumps(_rec("assistant", [
+                {"type": "tool_use", "name": "SubagentHandback",
+                 "input": {"message": "m"}}])) + "\n")
+        self.assertEqual(transcript.handback_positions(path), [1])
+
+    def test_missing_file_returns_empty(self):
+        self.assertEqual(
+            transcript.handback_positions(os.path.join(self.tmp.name, "nope.jsonl")), [])
+
+
 class TestDispatchRequest(unittest.TestCase):
     """dispatch prompt = subagent transcript 的第一則 user 訊息。"""
 

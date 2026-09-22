@@ -217,12 +217,21 @@ Claude Code 不保留 subagent 產出，session 結束後 `outputFile` 會被清
 subagent transcript 本身在磁碟上留得比較久，所以 Layer 1 用錯欄位那段期間的列可以事後重評：
 
 ```sh
-$R/backfill_corpus.py            # 只報告：多少列可重評
+$R/backfill_corpus.py            # 只報告：多少個 agent、會重評幾次
 $R/backfill_corpus.py --apply    # 重評並換檔，原檔備份成 .bak-<時間>
+$R/backfill_corpus.py --all --apply   # 連已經是 handback 的列也重評（萃取方式改過時）
 ```
 
-**已知未處理**：corpus 有部分列是重複的 `agent_id`（同一個 agent 的 SubagentStop 觸發了
-2-5 次，實測 100 列裡有 26 列重複）。回填照原樣保留，沒有去重；Layer 2 抽樣時要留意。
+**重評的單位是「每一次 handback」，不是「每個舊列」。** 一個 agent 可以交回不只一次
+（實測 76 個 agent 共 92 次），SubagentStop 每次各觸發一次 hook，所以 corpus 同一個
+`agent_id` 本來就會有好幾列——那不是重複，是不同次的交付。
+
+照舊列數重跑會讓每一列都讀到 transcript 的**最終**狀態，變成同一份報告的複本，中間
+幾次交回的內容就沒了。所以 `rebuild()` 是照 `transcript.handback_positions()` 把
+transcript 切到那一次交回為止，一次餵一份給 hook，重現當下看到的狀態。
+
+存檔（`reports/`）以 `agent_id` 為檔名，一個 agent 只有一份，存最終狀態，而且餵的是
+真實路徑不是切片——切片跑完就刪，存進去只會留下死路徑。
 
 ## 自動調校與人工的分界
 

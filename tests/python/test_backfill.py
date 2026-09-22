@@ -144,6 +144,42 @@ class TestMergeLateRows(unittest.TestCase):
         self.assertIn({"agent_id": "a2"}, merged)
 
 
+class TestSliceTranscript(unittest.TestCase):
+    """回填要餵 hook 的是「那一次交回當下」的 transcript，不是跑完的最終狀態。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _write(self, records, name="agent.jsonl"):
+        path = os.path.join(self.tmp.name, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            for r in records:
+                fh.write(json.dumps(r) + "\n")
+        return path
+
+    def test_keeps_records_up_to_and_including_the_given_position(self):
+        src = self._write([{"n": 0}, {"n": 1}, {"n": 2}, {"n": 3}])
+        dest = os.path.join(self.tmp.name, "sliced.jsonl")
+        backfill.slice_transcript(src, 2, dest)
+        with open(dest, encoding="utf-8") as fh:
+            got = [json.loads(l) for l in fh]
+        self.assertEqual(got, [{"n": 0}, {"n": 1}, {"n": 2}])
+
+    def test_a_slice_at_the_first_handback_hides_the_later_one(self):
+        src = self._write([
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "SubagentHandback",
+                 "input": {"message": "first"}}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "SubagentHandback",
+                 "input": {"message": "second"}}]}},
+        ])
+        dest = os.path.join(self.tmp.name, "sliced.jsonl")
+        backfill.slice_transcript(src, 0, dest)
+        self.assertEqual(backfill.transcript.handback_report(dest), "first")
+
+
 class TestRebuild(unittest.TestCase):
     """跑 hook 的那一段。用 stub hook 取代真的 hook，不打網路。"""
 
@@ -151,11 +187,22 @@ class TestRebuild(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.projects = os.path.join(self.tmp.name, "projects")
-        d = os.path.join(self.projects, "proj", "sess", "subagents")
-        os.makedirs(d)
-        self.tpath = os.path.join(d, "agent-a1.jsonl")
-        open(self.tpath, "w").close()
+        self.subagents = os.path.join(self.projects, "proj", "sess", "subagents")
+        os.makedirs(self.subagents)
         self.out = os.path.join(self.tmp.name, "out.jsonl")
+
+    def _transcript(self, agent_id, handbacks):
+        path = os.path.join(self.subagents, "agent-%s.jsonl" % agent_id)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "user", "message": {"content": [
+                {"type": "text", "text": "go"}]}}) + "\n")
+            for msg in handbacks:
+                fh.write(json.dumps({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": "SubagentHandback",
+                     "input": {"message": msg}}]}}) + "\n")
+                fh.write(json.dumps({"type": "assistant", "message": {"content": [
+                    {"type": "text", "text": "Report delivered."}]}}) + "\n")
+        return path
 
     def _stub_hook(self, body):
         path = os.path.join(self.tmp.name, "stub.sh")
@@ -164,44 +211,87 @@ class TestRebuild(unittest.TestCase):
         os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
         return path
 
-    def test_counts_a_row_as_rebuilt_when_the_hook_appends_it(self):
-        hook = self._stub_hook(
-            'INPUT=$(cat)\n'
-            'printf \'{"agent_id":"a1","layer":1}\\n\' >> "$EVAL_CORPUS"\n')
+    def _append_hook(self):
+        """假的 judge hook：把餵進來那份 transcript 的最後一個 handback 記成一列。"""
+        path = os.path.join(self.tmp.name, "judge_stub.py")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "p = json.load(sys.stdin)\n"
+                "report = ''\n"
+                "for line in open(p['agent_transcript_path'], encoding='utf-8'):\n"
+                "    rec = json.loads(line)\n"
+                "    for b in (rec.get('message') or {}).get('content') or []:\n"
+                "        if b.get('name') == 'SubagentHandback':\n"
+                "            report = b['input']['message']\n"
+                "with open(os.environ['EVAL_CORPUS'], 'a', encoding='utf-8') as out:\n"
+                "    out.write(json.dumps("
+                "{'agent_id': p['agent_id'], 'report': report}) + '\\n')\n")
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    def _env(self):
+        return dict(os.environ)
+
+    def test_writes_one_row_per_handback_not_one_per_corpus_row(self):
+        self._transcript("a1", ["first", "second", "third"])
+        hook = self._append_hook()
         summary = backfill.rebuild([{"agent_id": "a1"}], self.projects,
-                                   judge_hook=hook, corpus_out=self.out)
+                                   judge_hook=hook, corpus_out=self.out, env=self._env())
+        self.assertEqual(summary["rebuilt"], 3)
+        with open(self.out, encoding="utf-8") as fh:
+            reports = [json.loads(l)["report"] for l in fh]
+        self.assertEqual(reports, ["first", "second", "third"])
+
+    def test_collapses_duplicate_corpus_rows_for_one_agent(self):
+        # 修正前同一個 agent 有三列；重建後該由 handback 次數決定，而不是舊列數。
+        self._transcript("a1", ["only"])
+        hook = self._append_hook()
+        summary = backfill.rebuild(
+            [{"agent_id": "a1"}, {"agent_id": "a1"}, {"agent_id": "a1"}],
+            self.projects, judge_hook=hook, corpus_out=self.out, env=self._env())
         self.assertEqual(summary["rebuilt"], 1)
-        self.assertEqual(summary["no_transcript"], 0)
-        self.assertEqual(summary["hook_produced_nothing"], 0)
+        self.assertEqual(summary["agents"], 1)
 
-    def test_counts_a_row_the_hook_silently_dropped(self):
-        hook = self._stub_hook("cat >/dev/null\n")
-        summary = backfill.rebuild([{"agent_id": "a1"}], self.projects,
-                                   judge_hook=hook, corpus_out=self.out)
-        self.assertEqual(summary["rebuilt"], 0)
-        self.assertEqual(summary["hook_produced_nothing"], 1)
-
-    def test_skips_rows_whose_transcript_is_gone(self):
-        hook = self._stub_hook(
-            'cat >/dev/null\n'
-            'printf \'{"agent_id":"x"}\\n\' >> "$EVAL_CORPUS"\n')
+    def test_skips_an_agent_whose_transcript_is_gone(self):
+        hook = self._append_hook()
         summary = backfill.rebuild([{"agent_id": "vanished"}], self.projects,
-                                   judge_hook=hook, corpus_out=self.out)
+                                   judge_hook=hook, corpus_out=self.out, env=self._env())
         self.assertEqual(summary["no_transcript"], 1)
         self.assertEqual(summary["rebuilt"], 0)
         self.assertFalse(os.path.exists(self.out))
 
-    def test_feeds_the_hook_a_payload_naming_the_transcript(self):
-        seen = os.path.join(self.tmp.name, "seen.json")
-        hook = self._stub_hook(
-            'cat > "%s"\n'
-            'printf \'{"agent_id":"a1"}\\n\' >> "$EVAL_CORPUS"\n' % seen)
-        backfill.rebuild([{"agent_id": "a1", "agent_type": "Explore"}], self.projects,
-                         judge_hook=hook, corpus_out=self.out)
+    def test_skips_an_agent_that_never_handed_back(self):
+        self._transcript("a1", [])
+        hook = self._append_hook()
+        summary = backfill.rebuild([{"agent_id": "a1"}], self.projects,
+                                   judge_hook=hook, corpus_out=self.out, env=self._env())
+        self.assertEqual(summary["no_handback"], 1)
+        self.assertEqual(summary["rebuilt"], 0)
+
+    def test_archives_once_per_agent_against_the_real_transcript(self):
+        # 切片跑完就刪，存檔不能記切片的路徑，否則留下死路徑。
+        real = self._transcript("a1", ["first", "second"])
+        seen = os.path.join(self.tmp.name, "archived.jsonl")
+        archive = self._stub_hook('cat >> "%s"\n' % seen)
+        reports = os.path.join(self.tmp.name, "reports")
+        os.makedirs(reports)
+        backfill.rebuild([{"agent_id": "a1"}], self.projects,
+                         judge_hook=self._append_hook(), corpus_out=self.out,
+                         archive_hook=archive, reports_out=reports, env=self._env())
         with open(seen, encoding="utf-8") as fh:
-            payload = json.load(fh)
-        self.assertEqual(payload["agent_transcript_path"], self.tpath)
-        self.assertEqual(payload["agent_type"], "Explore")
+            payloads = [json.loads(l) for l in fh]
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]["agent_transcript_path"], real)
+
+    def test_counts_a_handback_the_hook_silently_dropped(self):
+        self._transcript("a1", ["only"])
+        hook = self._stub_hook("cat >/dev/null\n")
+        summary = backfill.rebuild([{"agent_id": "a1"}], self.projects,
+                                   judge_hook=hook, corpus_out=self.out, env=self._env())
+        self.assertEqual(summary["rebuilt"], 0)
+        self.assertEqual(summary["hook_produced_nothing"], 1)
 
 
 if __name__ == "__main__":

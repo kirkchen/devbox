@@ -18,8 +18,10 @@ transcript 多半還在磁碟上，報告抽得回來，所以可以重評而不
 由 hook 自己從 ~/.config/claude/typesafe.env 讀。
 """
 import argparse
+import collections
 import datetime
 import glob
+import importlib.util
 import json
 import os
 import shutil
@@ -28,6 +30,21 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_transcript():
+    """部署後叫 transcript.py，repo 裡叫 executable_transcript.py（chezmoi 前綴）。"""
+    for name in ("transcript.py", "executable_transcript.py"):
+        path = os.path.join(HERE, name)
+        if os.path.exists(path):
+            spec = importlib.util.spec_from_file_location("transcript", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise ImportError("找不到 transcript.py（先 chezmoi apply）")
+
+
+transcript = _load_transcript()
 HOME = os.path.expanduser("~")
 EVAL_DIR = os.environ.get("EVAL_DIR", os.path.join(HOME, ".local/share/model-router-eval"))
 PROJECTS = os.environ.get("CLAUDE_PROJECTS", os.path.join(HOME, ".claude/projects"))
@@ -83,34 +100,69 @@ def _old_last_message(agent_id, reports_dir):
         return ""
 
 
+def slice_transcript(src, position, dest):
+    """把 src 的第 0..position 行（含）寫到 dest，重現那一次交回當下的狀態。"""
+    with open(src, encoding="utf-8") as fin, open(dest, "w", encoding="utf-8") as fout:
+        for index, line in enumerate(fin):
+            if index > position:
+                break
+            fout.write(line)
+    return dest
+
+
 def rebuild(rows, projects_root, judge_hook, corpus_out,
             archive_hook=None, reports_out=None, reports_dir=None, env=None):
-    """逐列跑 hook 重建。回傳計數，不動任何既有檔案。"""
-    summary = {"rebuilt": 0, "no_transcript": 0, "hook_produced_nothing": 0}
+    """一個 agent 的**每一次 handback** 各重評一次。回傳計數，不動任何既有檔案。
+
+    重點是「每次交回各一列」，不是「每個舊列各一次」。一個 agent 可以交回多次，
+    SubagentStop 每次各觸發一次 hook，所以舊 corpus 同一個 agent_id 會有好幾列。
+    直接照舊列數重跑會讓每一列都讀到最終狀態、變成同一份報告的複本，中間那幾次
+    交回的內容就沒了——所以改成照 handback 的位置切 transcript，一次餵一份。
+    """
+    summary = {"agents": 0, "rebuilt": 0, "no_transcript": 0,
+               "no_handback": 0, "hook_produced_nothing": 0}
     base_env = dict(os.environ if env is None else env)
     base_env["EVAL_CORPUS"] = corpus_out
     if reports_out:
         base_env["SUBAGENT_REPORT_DIR"] = reports_out
+
+    by_agent = collections.OrderedDict()
     for row in rows:
-        agent_id = row.get("agent_id") or ""
-        tpath = find_transcript(agent_id, projects_root)
-        if not tpath:
-            summary["no_transcript"] += 1
-            continue
-        last = _old_last_message(agent_id, reports_dir) if reports_dir else ""
-        payload = json.dumps(build_payload(row, tpath, last))
-        before = os.path.getsize(corpus_out) if os.path.exists(corpus_out) else 0
-        subprocess.run([judge_hook], input=payload, text=True,
-                       capture_output=True, env=base_env)
-        after = os.path.getsize(corpus_out) if os.path.exists(corpus_out) else 0
-        if after > before:
-            summary["rebuilt"] += 1
-        else:
-            summary["hook_produced_nothing"] += 1
-            continue
-        if archive_hook and reports_out:
-            subprocess.run([archive_hook], input=payload, text=True,
-                           capture_output=True, env=base_env)
+        by_agent.setdefault(row.get("agent_id") or "", row)
+
+    work = tempfile.mkdtemp(prefix="backfill-slice-")
+    try:
+        for agent_id, row in by_agent.items():
+            summary["agents"] += 1
+            tpath = find_transcript(agent_id, projects_root)
+            if not tpath:
+                summary["no_transcript"] += 1
+                continue
+            positions = transcript.handback_positions(tpath)
+            if not positions:
+                summary["no_handback"] += 1
+                continue
+            last = _old_last_message(agent_id, reports_dir) if reports_dir else ""
+            for nth, position in enumerate(positions):
+                sliced = slice_transcript(
+                    tpath, position, os.path.join(work, "%s-%d.jsonl" % (agent_id, nth)))
+                payload = json.dumps(build_payload(row, sliced, last))
+                before = os.path.getsize(corpus_out) if os.path.exists(corpus_out) else 0
+                subprocess.run([judge_hook], input=payload, text=True,
+                               capture_output=True, env=base_env)
+                after = os.path.getsize(corpus_out) if os.path.exists(corpus_out) else 0
+                if after > before:
+                    summary["rebuilt"] += 1
+                else:
+                    summary["hook_produced_nothing"] += 1
+            # 存檔以 agent_id 為檔名，一個 agent 只有一份，存最終狀態即可。
+            # 這裡餵真實路徑而不是切片：切片跑完就刪了，存進去只會留下死路徑。
+            if archive_hook and reports_out:
+                subprocess.run([archive_hook],
+                               input=json.dumps(build_payload(row, tpath, last)),
+                               text=True, capture_output=True, env=base_env)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     return summary
 
 
@@ -151,6 +203,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="實際換檔，預設只報告")
+    ap.add_argument("--all", action="store_true",
+                    help="連已經是 handback 的列也重評（萃取方式改過時用）")
     ap.add_argument("--limit", type=int, help="只處理前 N 列，先試水溫用")
     ap.add_argument("--corpus", default=os.path.join(EVAL_DIR, "corpus.jsonl"))
     ap.add_argument("--reports", default=os.path.join(EVAL_DIR, "reports"))
@@ -163,16 +217,34 @@ def main(argv=None):
     if not rows:
         print("corpus 是空的或不存在：%s" % args.corpus)
         return 1
-    stale = [r for r in rows if r.get("report_source") != "handback"]
-    print("corpus 共 %d 列，其中 %d 列是用 last_assistant_message 評的" % (len(rows), len(stale)))
+    if args.all:
+        stale = list(rows)
+        print("corpus 共 %d 列，--all：全部重評" % len(rows))
+    else:
+        stale = [r for r in rows if r.get("report_source") != "handback"]
+        print("corpus 共 %d 列，其中 %d 列是用 last_assistant_message 評的"
+              % (len(rows), len(stale)))
     if args.limit:
         stale = stale[:args.limit]
         print("--limit %d：這次只處理前 %d 列" % (args.limit, len(stale)))
 
-    recoverable = sum(1 for r in stale if find_transcript(r.get("agent_id") or "",
-                                                          args.projects))
-    print("transcript 還在、可重評：%d 列（其餘 %d 列沒救）"
-          % (recoverable, len(stale) - recoverable))
+    agents = []
+    for r in stale:
+        if r.get("agent_id") not in {a.get("agent_id") for a in agents}:
+            agents.append(r)
+    handbacks = 0
+    recoverable = 0
+    for r in agents:
+        tpath = find_transcript(r.get("agent_id") or "", args.projects)
+        if not tpath:
+            continue
+        n = len(transcript.handback_positions(tpath))
+        if n:
+            recoverable += 1
+            handbacks += n
+    print("相異 agent %d 個，transcript 還在且有交回紀錄的 %d 個"
+          % (len(agents), recoverable))
+    print("會重評 %d 次（每次 handback 各一列，不是每個舊列各一次）" % handbacks)
     if not args.apply:
         print("\n只報告。要實際重建加 --apply（會呼叫 Jev，每筆約 $0.00008）")
         return 0
@@ -190,9 +262,10 @@ def main(argv=None):
     summary = rebuild(stale, args.projects, args.judge_hook, corpus_out,
                       archive_hook=args.archive_hook, reports_out=reports_out,
                       reports_dir=args.reports)
-    print("  重建 %d 列 / transcript 不在 %d 列 / hook 沒產出 %d 列"
-          % (summary["rebuilt"], summary["no_transcript"],
-             summary["hook_produced_nothing"]))
+    print("  agent %d 個 → 重建 %d 列 / transcript 不在 %d 個 / 沒交回紀錄 %d 個"
+          " / hook 沒產出 %d 次"
+          % (summary["agents"], summary["rebuilt"], summary["no_transcript"],
+             summary["no_handback"], summary["hook_produced_nothing"]))
     if not summary["rebuilt"]:
         print("沒有任何一列重建成功，不換檔。")
         return 1

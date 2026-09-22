@@ -23,26 +23,48 @@ HANDBACK_TOOL = "SubagentHandback"
 _SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?(?:</system-reminder>|\Z)", re.S)
 
 
-def _records(path):
-    """逐行 yield transcript 的 JSON 記錄，壞行跳過。"""
+def _numbered_records(path):
+    """yield (行號, JSON 記錄)。行號含壞行與空行，才對得回原檔的位置。"""
     try:
         fh = open(path, encoding="utf-8")
     except OSError:
         return
     with fh:
-        for line in fh:
+        for index, line in enumerate(fh):
             line = line.strip()
             if not line:
                 continue
             try:
-                yield json.loads(line)
+                yield index, json.loads(line)
             except ValueError:
                 continue
+
+
+def _records(path):
+    """逐行 yield transcript 的 JSON 記錄，壞行跳過。"""
+    for _, record in _numbered_records(path):
+        yield record
 
 
 def _blocks(record):
     content = (record.get("message") or {}).get("content")
     return content if isinstance(content, list) else []
+
+
+def _is_handback(record):
+    return any(isinstance(b, dict)
+               and b.get("type") == "tool_use"
+               and b.get("name") == HANDBACK_TOOL
+               for b in _blocks(record))
+
+
+def handback_positions(path):
+    """每一次 SubagentHandback 所在的行號（0 起算）。
+
+    一個 agent 可以交回不只一次，SubagentStop 每次交回各觸發一次 hook。回填要重現
+    「那一次交回當下」的 transcript 狀態，就得知道每次交回停在哪一行。
+    """
+    return [index for index, record in _numbered_records(path) if _is_handback(record)]
 
 
 def handback_report(path):
