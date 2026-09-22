@@ -18,6 +18,14 @@ chezmoi init --source="./chezmoi" --apply   # Re-init (prompts for name/email/gi
 chezmoi add ~/.newconfig --source="./chezmoi"  # Add new dotfile
 ```
 
+## Python Tests
+
+```bash
+python3 -m unittest discover -s tests/python -v   # 全部
+python3 -m py_compile chezmoi/private_dot_config/claude/tool-reduce/*.py
+python3 -m py_compile chezmoi/private_dot_config/claude/hooks/*.py
+```
+
 ## Zsh Tests
 
 ```bash
