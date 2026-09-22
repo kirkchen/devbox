@@ -30,14 +30,22 @@ import glob
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime
 
+import descriptor
 import store
 from jsonl_io import read_jsonl
 
 MIN_HITS = 2               # 獨有詞至少命中幾個才算「後來被用到」——別調，見上面的說明
 CONTROL_RATE = 0.10        # 隨機對照組：抽多少比例「沒被刪」的段落一起判
+
+# token 邊界要問的是「這個字元有沒有可能是同一個 distinctive token 的
+# 延伸」，答案跟 descriptor.distinctive() 產生 token 時允許的字元集合
+# 必須是同一份——直接組 descriptor.TOKEN_CHARS，不是在這裡另外寫一份
+# 一樣的字元集合，兩邊才不會走鐘（task-9 fix-round 2）。
+_TOKEN_CHAR_RE = re.compile("[" + descriptor.TOKEN_CHARS + "]")
 
 
 def _mark_skip(skip_counter):
@@ -71,8 +79,20 @@ def _is_token_char(ch):
     路徑、識別字、錯誤字串常見），所以 Python 的 `\\b`（只認字母數字／
     底線的邊界）是錯的工具——用它會把 `main.py` 這種 token 從中間的
     `.` 切斷。邊界自己判斷：只要不是這些字元，就不可能是同一個 token
-    的延伸。"""
-    return ch.isalnum() or ch in "_-./"
+    的延伸。
+
+    刻意不用 `ch.isalnum()`——Python 的 `isalnum()` 對 Unicode 字母一視
+    同仁，中文字（例如「維」)也算 alnum、回傳 True。這支工具的 transcript
+    是中文，中文不像英文用空白斷詞：`修改main.py之後重跑` 是一句話裡包著
+    identifier `main.py`，不是一個字元都不能拆的超長 token。用 isalnum()
+    會把緊貼在 token 兩側的中文字誤判成『同一個 token 的延伸』，邊界檢查
+    因此失敗、命中數少算——而且是往危險的方向少算：silent_miss 低估會讓
+    刪除看起來比實際安全，門檻會被調成刪更多（task-9 fix-round 2，
+    coordinator review）。沒有任何合法的 distinctive token 會包含 CJK
+    字元（都是檔案路徑、識別字、錯誤字串、數字），所以直接排除 ASCII
+    英數字＋`_-./` 以外的所有字元——包含 CJK、標點（含全形標點）、空白、
+    全形英數——一律當邊界，跟 descriptor.TOKEN_CHARS 用同一份定義。"""
+    return bool(_TOKEN_CHAR_RE.match(ch))
 
 
 def _count_token_occurrences(token, text):

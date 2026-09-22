@@ -614,6 +614,66 @@ class TestHitCountingRespectsTokenBoundaries(unittest.TestCase):
         self.assertEqual(rows[0]["state"], "silent_miss")
 
 
+class TestHitCountingTreatsCjkAsABoundary(unittest.TestCase):
+    """中文不用空白斷詞——`修改main.py之後重跑` 是一句話裡包著 identifier
+    `main.py`，不是一整個超長 token。舊版用 `ch.isalnum()` 判斷邊界，
+    Python 的 isalnum() 對中文字一視同仁也回傳 True，於是緊貼 token 的
+    中文字被誤判成『同一個 token 的延伸』，邊界檢查失敗、命中數少算。
+    這個專案的 transcript 就是中文，所以這不是邊角案例，是常態；而且
+    錯的方向是危險的：少算 silent_miss 會讓刪除看起來比實際安全（task-9
+    fix-round 2，coordinator review）。這裡的字元類別直接引用
+    descriptor.TOKEN_CHARS，跟 distinctive() 產生 token 用的是同一份
+    定義，不會走鐘。"""
+
+    def test_token_adjacent_to_cjk_with_space_counts(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences("main.py", "修改 main.py 之後重跑"), 1)
+
+    def test_token_adjacent_to_cjk_without_space_counts(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences("main.py", "修改main.py之後重跑"), 1)
+
+    def test_hyphenated_token_adjacent_to_cjk_without_space_counts(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences("JKO-33644", "這張票JKO-33644已經關了"), 1)
+
+    def test_underscored_token_adjacent_to_cjk_without_space_counts(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences("uat_proxy", "設定uat_proxy的來源"), 1)
+
+    def test_token_adjacent_to_fullwidth_comma_counts(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences("main.py", "main.py，之後"), 1)
+
+    def test_token_wrapped_in_fullwidth_parentheses_counts(self):
+        self.assertEqual(
+            tr_eval._count_token_occurrences("main.py", "（main.py）"), 1)
+
+    def test_coincidental_substring_inside_english_prose_still_scores_zero(self):
+        # 回歸：修這個坑不能連原本就該擋掉的英文巧合子字串又放行回去。
+        self.assertEqual(
+            tr_eval._count_token_occurrences(
+                "main", "we remain in the domain of maintenance"),
+            0)
+
+    def test_classify_detects_silent_miss_from_cjk_adjacent_reference(self):
+        # 端對端：中文 transcript 裡緊貼中文字的 identifier 複述兩次，
+        # 必須被判成 silent_miss，不是因為邊界誤判而變成 clean。
+        decisions = [{"decision_id": "d10", "tool": "Bash",
+                     "chunks": [{"i": 0, "chars": 10, "dropped": True,
+                                "distinctive": ["uat_proxy"]}]}]
+        later = {"d10": "設定uat_proxy的來源，之後又提到uat_proxy一次"}
+        rows = tr_eval.classify(decisions, [], later)
+        self.assertEqual(rows[0]["state"], "silent_miss")
+
+    def test_token_char_class_matches_descriptor_token_chars(self):
+        # 兩邊字元類別是同一份定義，不是各自維護一份一樣的字串——直接
+        # 驗證 tr_eval 用來判斷邊界的 regex 是拿 descriptor.TOKEN_CHARS
+        # 組出來的。
+        import descriptor
+        self.assertIn(descriptor.TOKEN_CHARS, tr_eval._TOKEN_CHAR_RE.pattern)
+
+
 class TestBothViaValuesCountTheSame(unittest.TestCase):
     """restores.jsonl 的 via 只是『怎麼還原的』，不是兩種不同事件
     （task-9 correction 4）——tr-restore／direct-read 都要判成 restored，

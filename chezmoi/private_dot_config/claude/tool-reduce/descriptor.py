@@ -8,7 +8,12 @@ import re
 
 from store import SECRET_RE
 
-TOKEN = re.compile(r'[A-Za-z_][A-Za-z0-9_\-./]{5,}|\b\d{3,}\b')
+# token 本體允許的字元類別，抽成獨立常數而不是寫死在 TOKEN 的 pattern
+# 字串裡——tr-eval 判斷「獨有詞邊界」（見 executable_tr-eval.py 的
+# _is_token_char）要用同一組字元，兩邊都從這裡組出各自的 regex，才不會
+# 走鐘成兩份定義（task-9 fix-round 2）。
+TOKEN_CHARS = r'A-Za-z0-9_\-./'
+TOKEN = re.compile(r'[A-Za-z_][' + TOKEN_CHARS + r']{5,}|\b\d{3,}\b')
 URL_RE = re.compile(r'https?://\S+')
 STOP = set("""function return import export const class public private static string number
 boolean default true false null undefined https http www com org index files result results
