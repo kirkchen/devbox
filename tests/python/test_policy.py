@@ -25,7 +25,10 @@ class TestThresholds(unittest.TestCase):
 
 class TestPositionFloor(unittest.TestCase):
     """第一段的 later-referenced 率 42%（中間段 20.3%），卻拿到最高的 noise 分數。
-    這條規則把誤刪率從 9.8% 壓到 3.7%，代價只有 1.7 個百分點的節省。"""
+    離線研究（另一份 chunker、200 筆語料）量到這條規則把誤刪率從 9.8% 壓到
+    3.7%，代價 1.7 個百分點的節省。那幾個絕對值沒有被上線後的實測驗證過
+    ——實測只驗了節省那一項（預估 7.9%、實際 2.2%）；這裡釘住的是規則本身
+    （頭尾永遠不刪），不是那些數字。"""
 
     def test_never_drops_first_chunk(self):
         s = sc((0.99, 0.01), (0.99, 0.01), (0.99, 0.01), (0.99, 0.01))
@@ -97,6 +100,40 @@ class TestBooleanScoresNeverDelete(unittest.TestCase):
         s[1]["noise"] = True
         s[2]["uniq"] = False
         self.assertEqual(policy.decide(s, [100] * 4), [False] * 4)
+
+
+
+
+class TestShippedSourceDoesNotStateTheSupersededFigure(unittest.TestCase):
+    """M4：出貨的原始碼裡三處把已經被取代的 7.9% 當成事實在寫，而 README
+    同一份 repo 裡寫的是實測 2.2%。那幾個數字全部來自 arm-A 的離線研究
+    （另一份 chunker、200 筆語料），沒有一處加註。
+
+    下一個讀這些 docstring 的人會照著它們判斷門檻該往哪調——這是「先在
+    2.2% 上線、之後再從遙測重新推導」那個決定唯一寫在程式碼裡的依據，
+    寫錯等於把決定的理由也寫錯了。"""
+
+    def test_drop_policy_states_the_measured_figure_next_to_the_estimate(self):
+        doc = policy.__doc__
+        self.assertNotIn("省 7.9%、誤刪 3.7%", doc,
+                         "the superseded arm-A figure is still stated as fact")
+        self.assertIn("7.9%", doc)      # 保留歷史，但要標明是預估
+        self.assertIn("2.2%", doc)      # 實測值要在同一段裡
+        self.assertIn("離線", doc)
+        self.assertIn("chunker", doc)
+
+    def test_descriptor_qualifies_its_arm_a_numbers(self):
+        import descriptor
+        doc = descriptor.__doc__
+        self.assertIn("+3.6% 掉到 −0.9%", doc)   # 結論（由正轉負）保留
+        self.assertIn("離線", doc)
+        self.assertIn("2.2%", doc)
+
+    def test_this_files_own_docstring_is_qualified_too(self):
+        doc = TestPositionFloor.__doc__
+        self.assertNotIn("這條規則把誤刪率從 9.8% 壓到 3.7%，代價只有", doc)
+        self.assertIn("離線研究", doc)
+        self.assertIn("2.2%", doc)
 
 
 if __name__ == "__main__":

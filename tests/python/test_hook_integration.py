@@ -529,13 +529,47 @@ class TestMcpEnvelopeSurvivesFiltering(unittest.TestCase):
         self.assertEqual(restore_every_marker(filtered_payload, self.st),
                          json.loads(self.text)["log"])
 
-    def test_broken_envelope_fails_open_instead_of_shipping_the_bare_payload(self):
-        """rewrap 組不回信封時（kind 描述不了這份 text）要整份放行，不能
-        退而求其次把裸 payload 送出去 —— 那正是 C1 的失效模式本身。"""
+    def test_rewrap_refuses_an_envelope_it_cannot_rebuild(self):
+        """kind 描述不了這份 text 時要丟例外，不能回傳裸 payload。"""
         with self.assertRaises(ValueError):
             hook.chunker.rewrap('{"log": 1}', "mcp:log", "x")
         with self.assertRaises(ValueError):
             hook.chunker.rewrap("not json", "mcp:log", "x")
+
+    def test_broken_envelope_fails_open_instead_of_shipping_the_bare_payload(self):
+        """rewrap 失敗時，整條 hook 要守住 fail-open 契約本身：exit 0、
+        stdout 一個字都沒有、存放區底下一個位元組都沒被寫過。
+
+        只斷言「rewrap 會丟例外」是不夠的——那是被測性質的前提，不是性質
+        本身。真正要釘住的是「這個例外之後發生了什麼」：輸出沒被改（模型
+        拿到原本的信封），而且沒有任何墓碑紀錄留在永遠不會被清掉的
+        archive/ 裡（迴圈只算不寫，就是為了這個）。"""
+        root = tempfile.mkdtemp()
+        ev = {"tool_name": "Bash", "tool_response": {"stdout": mcp_envelope()},
+              "session_id": "sess-rewrap-fail"}
+        buf = io.BytesIO()
+        wrapper = io.TextIOWrapper(buf, encoding="utf-8", newline="\n")
+        old_home = os.environ.get("TOOL_REDUCE_HOME")
+        os.environ["TOOL_REDUCE_HOME"] = root
+        try:
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(ev))), \
+                 mock.patch.object(sys, "stdout", wrapper), \
+                 mock.patch.object(hook.jev, "ask", DROP_MIDDLE), \
+                 mock.patch.object(hook.chunker, "rewrap",
+                                   side_effect=ValueError("cannot rebuild")):
+                with self.assertRaises(SystemExit) as cm:
+                    hook.main()
+            wrapper.flush()
+        finally:
+            if old_home is None:
+                os.environ.pop("TOOL_REDUCE_HOME", None)
+            else:
+                os.environ["TOOL_REDUCE_HOME"] = old_home
+        self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(buf.getvalue().decode("utf-8", "replace"), "")
+        written = [os.path.join(d, f)
+                   for d, _dirs, files in os.walk(root) for f in files]
+        self.assertEqual(written, [], f"wrote to the store despite failing open: {written}")
 
     def test_raw_and_read_envelopes_are_identities(self):
         self.assertEqual(hook.chunker.rewrap("abc", "raw", "xyz"), "xyz")

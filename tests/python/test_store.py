@@ -165,5 +165,121 @@ class TestSaveChunkIsAtomic(unittest.TestCase):
         self.assertEqual(mode, 0o600)
 
 
+
+
+# I4：六種實測過、原本一個都沒被濾掉的真實形狀憑證，加上原本就擋得住的
+# 幾種（回歸保護）。archive/ 刻意不被 tr-cleanup.sh 清掉、7 天掃除也排除
+# 它，所以漏掉的東西是永久的。
+MODERN_SECRETS = {
+    "jwt": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+           "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ."
+           "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "google_api_key": "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY",
+    "gitlab_pat": "glpat-ABC123defGHI456jklM",
+    # 字面拆開：這是捏造的測試值，但 GitHub 的 push protection 認樣式不認真偽，
+    # 整串寫在原始碼裡會讓每次 push 被擋。組裝後 scrub() 看到的仍是完整字串。
+    "stripe_live": "sk_" + "live_" + "51H8xY2KZvIcABCdefGHIjklMNOpqrSTUvwxYZ",
+    "slack_app": "xapp-1-A01234567-1234567890123-abcdef",
+    "huggingface": "hf_ABCdefGHIjklMNOpqrSTUvwxYZ012345",
+    "npm": "npm_ABCdefGHIjklMNOpqrSTUvwxYZ0123456789",
+    "vault": "hvs.CAESIJxyzABCdefGHIjklMNOpqrSTUvwxYZ0123456789",
+}
+ALREADY_COVERED = {
+    "openai": "sk-abcdefghijklmnopqrstuvwxyz012345",
+    "github": "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+    "aws": "AKIAIOSFODNN7EXAMPLE",
+    "slack_bot": "xoxb-1234-5678-abcdefgh",
+    "long_base64": "aGVsbG93b3JsZGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1",
+}
+BENIGN_TOKENS = [
+    "main.py", "target_https_proxy", "module.uat_cluster.ns_alpha",
+    "src/components/Button.tsx", "kubernetes_namespace", "2026-09-22",
+    "docs/superpowers/specs/2026-09-21-tool-result-reduce-design.md",
+    "chezmoi/private_dot_config/claude/tool-reduce/executable_tr-eval.py",
+    "noOutputExpected", "persistedOutputPath",
+    # 40 字元以上、但沒有點的路徑與 snake/kebab 識別字。原本這份清單裡
+    # 一個都沒有，所以「放寬正則不能把識別字掃掉」這條測不出東西——
+    # 加寬 SECRET_RE 時整批被掃掉也不會紅。
+    "chezmoi/private_dot_config/claude/tool-reduce",
+    "google_compute_region_network_endpoint_group",
+    "jkopay-payment-gateway-deployment-prod-abc123",
+    "session-ac09f1da-7b9f-49ae-93c7-413e44ac698e",
+    "module.gcp_uat_cluster_network.google_compute_subnetwork.primary_subnet",
+    "google_compute_region_network_endpoint_group.some_very_long_attribute_name",
+    # 以密鑰欄位名開頭、但整個 token 不是那個欄位名的普通識別字。
+    # 前綴比對會把這一整類掃掉。
+    "password_hash", "private_key_path", "access_token_url",
+    "refresh_token_expiry", "secret_key_base", "api_key_id",
+    "npm_package_version", "npm_config_registry",
+    "hf_dataset_loader", "AIzaHelper",
+]
+
+# 欄位名稱本身（整個 token 相等，或 `name=value` 形狀）還是要濾掉——
+# 上面那批「以欄位名開頭」的識別字不該把這條也一起放掉。
+SECRET_FIELD_NAMES = ["password", "passwd", "api_key", "apikey", "secret_key",
+                      "client_secret", "access_token", "refresh_token",
+                      "private_key", "password=hunter2"]
+
+
+class TestScrubCoversModernCredentialShapes(unittest.TestCase):
+    def test_modern_shapes_are_scrubbed(self):
+        for name, value in MODERN_SECRETS.items():
+            with self.subTest(name):
+                self.assertEqual(store.scrub([value]), [], f"{name} leaked")
+
+    def test_previously_covered_shapes_still_scrubbed(self):
+        for name, value in ALREADY_COVERED.items():
+            with self.subTest(name):
+                self.assertEqual(store.scrub([value]), [], f"{name} leaked")
+
+    def test_ordinary_identifiers_survive(self):
+        """放寬正則不能變成把所有識別字都濾掉——獨有詞集合是 tr-eval 的
+        Layer 1 比對依據，濾過頭會把沉默誤刪往低估那個方向偏（刪除看起來
+        比實際安全），而且 `[REDACTED]` 會出現在 agent 真正會讀的墓碑標記
+        上，那是它用來決定要不要還原的那行字。"""
+        self.assertEqual(store.scrub(BENIGN_TOKENS), BENIGN_TOKENS)
+
+    def test_the_benign_list_actually_exercises_both_regression_classes(self):
+        """這份清單的前提：要真的包含「≥40 字元且沒有點」跟「以密鑰欄位名
+        開頭」這兩類，否則 test_ordinary_identifiers_survive 對這兩種放寬
+        方式是盲的（它原本就是）。"""
+        self.assertTrue(any(len(t) >= 40 and "." not in t for t in BENIGN_TOKENS))
+        self.assertTrue(any(t.startswith(("password", "api_key", "npm_", "hf_"))
+                            for t in BENIGN_TOKENS))
+
+    def test_bare_credential_field_names_are_still_scrubbed(self):
+        """把欄位名規則改成整詞比對，不能變成整條失效。"""
+        for name in SECRET_FIELD_NAMES:
+            with self.subTest(name):
+                self.assertEqual(store.scrub([name]), [], f"{name} survived")
+
+    def test_dot_separated_rule_needs_long_segments(self):
+        """以 `.` 分段的規則要求每段夠長，一般模組路徑打不到。"""
+        self.assertEqual(store.scrub(["a.b.c", "main.py", "pkg.module.Class"]),
+                         ["a.b.c", "main.py", "pkg.module.Class"])
+
+
+class TestDescriptorDoesNotCarrySecretsIntoTheArchive(unittest.TestCase):
+    """descriptor.make() 把被刪段落首行的前 ~200 字元放進墓碑標記，而那個
+    標記會被寫進 archive/tombstones.jsonl —— 永久保留。JWT 原本會整條進去
+    （TOKEN_CHARS 含 `.`，整個 JWT 是一個 token，長 base64 那條規則碰到點
+    就比對失敗）。"""
+
+    def test_jwt_in_the_first_line_is_redacted(self):
+        import descriptor
+        marker = descriptor.make(
+            "Authorization: Bearer " + MODERN_SECRETS["jwt"] + "\nmore\n",
+            "abc123.1")
+        self.assertNotIn(MODERN_SECRETS["jwt"], marker)
+        self.assertIn(descriptor.REDACTED, marker)
+
+    def test_each_modern_shape_is_redacted_in_the_marker(self):
+        import descriptor
+        for name, value in MODERN_SECRETS.items():
+            with self.subTest(name):
+                marker = descriptor.make(f"token is {value} here\nmore\n", "abc123.1")
+                self.assertNotIn(value, marker, f"{name} reached the marker")
+
+
 if __name__ == "__main__":
     unittest.main()

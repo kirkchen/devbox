@@ -47,11 +47,31 @@ CONTROL_RATE = 0.10        # 隨機對照組：抽多少比例「沒被刪」的
 # 一樣的字元集合，兩邊才不會走鐘（task-9 fix-round 2）。
 _TOKEN_CHAR_RE = re.compile("[" + descriptor.TOKEN_CHARS + "]")
 
-# 墓碑標記本身的形狀（descriptor.make）：
-#   `[省略 N 行 · <該段首行的前 ~200 字 · tr-restore <handle>]`
-# 非貪婪 + 長度上限：標記封頂 250 字元，JSON 跳脫最多再膨脹一些，400 綽綽
-# 有餘；上限的作用是不讓一個落單的 `[省略` 把後面整段文字都吃掉。
-_TOMBSTONE_RE = re.compile(r"\[省略.{0,400}?tr-restore\s+[A-Za-z0-9]+\.\d+\s*\]", re.S)
+# 墓碑標記本身的形狀（descriptor.make 的兩條分支，都長這樣）：
+#   `[省略 N 行 · <該段首行的前 ~200 字> · tr-restore <handle>]`
+#   `[省略 N 行 · tr-restore <handle>]`              （首行放不下時）
+#
+# 三個限制，每一個都是為了「只吃掉真的墓碑標記」：
+#
+# 1. 開頭要完整的 `[省略 <數字> 行 · `，不是只認 `[省略` 兩個字。
+#    `[省略]` 是中文裡很常見的省略記號，log 跟這個 repo 自己的文字裡都
+#    有；只認 `[省略` 的話，一個 `[省略]` 加上 400 字以內的任何一個真標記
+#    ，中間的所有文字（包含 agent 真的複述的識別字）會被整段吃掉。實測
+#    的形狀：「上一輪的輸出是 [省略] 的格式 / 我需要 <tokenA> ... <tokenB>
+#    / [省略 4 行 · ... · tr-restore abc.4]」→ 命中數從 2 掉到 0，段落
+#    從 silent_miss 變成 clean。過濾回音是為了不高估 silent_miss，吃掉
+#    真的複述卻是往低估的方向偏 —— 那是更危險的那一邊。
+# 2. 本體用 tempered dot `(?!\[省略)`：一次比對絕不跨過第二個 `[省略`，
+#    所以兩個標記之間的文字不可能被當成某一個標記的本體。
+# 3. 本體不跨行（`[^\n]`），長度封頂 400（標記本身封頂 250 字元，JSON
+#    跳脫再膨脹也綽綽有餘）。
+#
+# 標記的前綴由 descriptor.make() 產生，兩邊要一起改；
+# TestTombstoneEchoIsNotEvidence 有一條測試直接拿 descriptor.make() 的
+# 輸出餵進來，形狀一旦漂開就會紅。
+_TOMBSTONE_RE = re.compile(
+    r"\[省略\s+\d+\s+行\s+·\s+(?:(?!\[省略)[^\n]){0,400}?"
+    r"tr-restore\s+[A-Za-z0-9]+\.\d+\s*\]")
 
 
 def strip_tombstones(text):

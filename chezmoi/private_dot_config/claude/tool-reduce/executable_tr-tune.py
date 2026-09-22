@@ -300,7 +300,10 @@ def main():
               f"{c['dropped']:>7}{c['silent_miss_rate']:>10.1%}")
     if not cands:
         print("\n沒有合格的候選（網格裡沒有任何組合的沉默誤刪率不高於現行），門檻維持不變。")
-    elif replayable < MIN_DECISIONS:
+    # 刻意不是 elif：候選是空集合、而且紀錄又太少，是兩件獨立的事，
+    # 使用者兩件都該聽到。掛成 elif 的話「沒有合格的候選」會把「紀錄
+    # 太少」這句蓋掉，而後者才是他真正該先處理的那一件。
+    if replayable < MIN_DECISIONS:
         print(f"\n注意：封存區只有 {replayable} 筆可重放的決策紀錄（需要至少 "
               f"{MIN_DECISIONS} 筆才能 --apply）。上面的排名不足以當作依據。")
 
@@ -342,6 +345,9 @@ def main():
         print("紀錄太少時 132 格的網格幾乎都是在對雜訊過擬合；一筆都沒有的時候"
               "每一格並列（省 0 字元、沉默誤刪 0%），排序後的第一名只是網格的"
               "第一格，也就是最激進的那一組門檻。")
+        print(f"（{MIN_DECISIONS} 這個數字是人訂的判斷，不是量出來的：它只是"
+              "「網格不再明顯在擬合雜訊」的下限。等 restores.jsonl 累積出真實的"
+              "還原遙測，這個門檻應該往上調。）")
         return 1
 
     if not cands:

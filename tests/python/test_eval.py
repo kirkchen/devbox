@@ -1888,5 +1888,164 @@ class TestShadowRecordsAreFilterable(unittest.TestCase):
         self.assertEqual(out["shadow_records_excluded"], 0)
 
 
+
+
+class TestTombstoneStripDoesNotEatOrdinaryProse(unittest.TestCase):
+    """回歸（本輪修正自己引入的）：`_TOMBSTONE_RE` 原本只認 `[省略` 兩個字
+    加上 400 字以內的任何一個合法標記，中間的東西整段吃掉。`[省略]` 是
+    中文裡很常見的省略記號，log 跟這個 repo 自己的文字裡都有。
+
+    方向很重要：過濾回音是為了不「高估」silent_miss；吃掉 agent 真的
+    複述的識別字卻是往「低估」偏——那會讓刪除看起來比實際安全，也會把
+    tr-tune 搜尋時的上限放寬。兩個錯誤不對稱。"""
+
+    TOKENS = ["module.uat_cluster.ns_alpha", "module.uat_cluster.ns_beta"]
+
+    def _window(self):
+        marker = descriptor.make("some dropped header line here\nmore\n",
+                                 "abc123def0.4")
+        return ("上一輪的輸出是 [省略] 的格式\n"
+                f"我需要 {self.TOKENS[0]} 這個資源，還有 {self.TOKENS[1]} 也要改\n"
+                + marker), marker
+
+    def test_an_ordinary_chinese_ellipsis_does_not_swallow_the_text_after_it(self):
+        window, marker = self._window()
+        stripped = tr_eval.strip_tombstones(window)
+        self.assertIn("[省略]", stripped)          # 普通省略記號留著
+        self.assertNotIn("tr-restore abc123def0.4", stripped)   # 真標記還是要走
+        for t in self.TOKENS:
+            self.assertIn(t, stripped, f"{t} was eaten by the strip")
+
+    def test_the_chunk_still_classifies_silent_miss(self):
+        """端到端：這正是回歸讓 silent_miss 變成 clean 的那條路徑。"""
+        window, _marker = self._window()
+        decisions = [{
+            "decision_id": "abc123def0", "session_id": "s1", "tool": "Bash",
+            "chars_before": 4000, "ts_ms": 1,
+            "chunks": [
+                {"i": 0, "chars": 100, "dropped": False, "distinctive": []},
+                {"i": 4, "chars": 300, "dropped": True, "distinctive": self.TOKENS},
+                {"i": 5, "chars": 100, "dropped": False, "distinctive": []}]}]
+        rows = tr_eval.classify(decisions, [], {"abc123def0": window})
+        self.assertEqual(rows[0]["state"], "silent_miss")
+
+    def test_both_descriptor_make_branches_are_still_stripped(self):
+        """規則綁在 descriptor.make 的輸出上，不是綁在一份手寫的字串上——
+        make() 的前綴一改，這條就會紅。含 room<=0 那條分支（首行放不下、
+        標記只剩 `[省略 N 行 · tr-restore <handle>]`）。"""
+        normal = descriptor.make("a dropped header line\nmore\n", "abc123def0.4")
+        # max_chars 剛好夠放下不帶首行的那個形狀（room == 0 -> 走 else 的
+        # 另一條分支），但放不下任何首行摘要。
+        no_room = descriptor.make("x" * 400 + "\n", "abc123def0.4", max_chars=37)
+        self.assertEqual(no_room, "[省略 2 行 · tr-restore abc123def0.4]")
+        for label, marker in (("normal", normal), ("no_room", no_room)):
+            with self.subTest(label):
+                self.assertEqual(
+                    tr_eval.strip_tombstones("A " + marker + " B").split(),
+                    ["A", "B"], f"{label} marker not fully stripped")
+
+    def test_a_match_never_spans_two_markers(self):
+        a = descriptor.make("alpha_token_one here\n", "aaa1111111.1")
+        b = descriptor.make("beta_token_two here\n", "aaa1111111.2")
+        stripped = tr_eval.strip_tombstones(a + " KEEP_THIS " + b)
+        self.assertIn("KEEP_THIS", stripped)
+        self.assertNotIn("alpha_token_one", stripped)
+        self.assertNotIn("beta_token_two", stripped)
+
+
+class TestShadowRestoresDoNotReachTheHeaderCount(unittest.TestCase):
+    """Minor：restores.jsonl 沒有 mode 欄位，但它指到的墓碑有。只濾決策跟
+    墓碑的話，一個純 shadow 的封存區會印出「決策 0 筆、墓碑 0 個、還原
+    1 次」——三個數字互相矛盾，而且那個 1 描述的是一次根本沒有從輸出裡
+    消失過的段落。"""
+
+    def _home(self, extra_restores=()):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"), [SHADOW_DECISION])
+        _write_jsonl(os.path.join(archive, "tombstones.jsonl"), SHADOW_TOMBSTONES)
+        _write_jsonl(os.path.join(archive, "restores.jsonl"),
+                     [{"handle": "sh1.1", "via": "tr-restore"}, *extra_restores])
+        return home
+
+    def _stats(self, home, *args):
+        return subprocess.run([sys.executable, STATS_PATH, *args],
+                              capture_output=True, text=True,
+                              env=dict(os.environ, TOOL_REDUCE_HOME=home,
+                                       TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp()))
+
+    def test_a_shadow_only_archive_reports_zero_restores(self):
+        r = self._stats(self._home(), "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["restores"], 0)
+        self.assertEqual(out["decisions"], 0)
+        self.assertEqual(out["tombstones"], 0)
+
+    def test_the_header_line_is_internally_consistent(self):
+        r = self._stats(self._home())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("決策 0 筆、墓碑 0 個、還原 0 次", r.stdout)
+
+    def test_an_orphan_restore_is_still_counted(self):
+        """查不到對應墓碑的還原仍然是一次確認的還原，不能被一起濾掉。"""
+        r = self._stats(self._home([{"handle": "zzz9999999.7", "via": "direct-read"}]),
+                        "--json")
+        self.assertEqual(json.loads(r.stdout)["restores"], 1)
+
+
+class TestTuneNoticesAreNotMutuallyExclusive(unittest.TestCase):
+    """Minor：列出候選時「紀錄太少」掛成 `elif` 在「沒有合格的候選」後面，
+    兩者同時成立時只聽得到前者——而後者才是使用者該先處理的那一件。"""
+
+    def test_both_notices_appear_together(self):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        # 一筆決策，中間段在任何門檻下都會被刪、獨有詞在 transcript 裡出現
+        # 兩次 -> 沒有任何候選過得了「不高於現行」；同時紀錄遠少於
+        # MIN_DECISIONS。
+        decision = {"decision_id": "e1", "session_id": "sess-e1", "tool": "Bash",
+                    "chars_before": 300, "ts_ms": 1_700_000_000_000,
+                    "chunks": [
+                        {"i": 0, "chars": 100, "dropped": False, "distinctive": [],
+                         "scores": {"noise": 0.1, "uniq": 0.9}},
+                        {"i": 1, "chars": 100, "dropped": False, "distinctive": ["kaboom"],
+                         "scores": {"noise": 1.0, "uniq": 0.0}},
+                        {"i": 2, "chars": 100, "dropped": False, "distinctive": [],
+                         "scores": {"noise": 0.1, "uniq": 0.9}}]}
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"), [decision])
+        transcript_dir = tempfile.mkdtemp()
+        _write_transcript(transcript_dir, "proj1", "sess-e1", [
+            {"type": "assistant", "timestamp": _iso(1_700_000_000_000 + 1000),
+             "message": {"content": [{"type": "text",
+                                      "text": "kaboom appears here and again kaboom"}]}}])
+        r = subprocess.run([sys.executable, TUNE_PATH], capture_output=True, text=True,
+                           env=dict(os.environ, TOOL_REDUCE_HOME=home,
+                                    TOOL_REDUCE_THRESHOLDS=os.path.join(
+                                        tempfile.mkdtemp(), "t.json"),
+                                    TOOL_REDUCE_TRANSCRIPT_DIR=transcript_dir))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("沒有合格的候選", r.stdout)
+        self.assertIn("不足以當作依據", r.stdout)
+
+    def test_the_refusal_says_min_decisions_is_a_judgement_call(self):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
+            json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
+        r = subprocess.run([sys.executable, TUNE_PATH, "--apply"],
+                           capture_output=True, text=True,
+                           env=dict(os.environ, TOOL_REDUCE_HOME=home,
+                                    TOOL_REDUCE_THRESHOLDS=os.path.join(
+                                        tempfile.mkdtemp(), "t.json"),
+                                    TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp()))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("人訂的判斷", r.stdout)
+        self.assertIn("往上調", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

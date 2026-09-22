@@ -11,10 +11,72 @@ HANDLE_RE = re.compile(r"^[A-Za-z0-9]+\.\d+$")
 # 不含 `.` 或路徑分隔符。見 Store.__init__ 對 containment 的說明。
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# 常見密鑰樣式。獨有詞集合可能夾帶金鑰片段（長 token 會被當識別字），封存前過濾掉。
+# 常見密鑰樣式。獨有詞集合可能夾帶金鑰片段（長 token 會被當識別字），
+# 封存前過濾掉；descriptor._scrub_secrets 也用這一份把墓碑描述詞裡的
+# token 換成 [REDACTED]。archive/ 刻意不被 tr-cleanup.sh 清掉、7 天掃除
+# 也排除它，所以漏掉的東西是永久的。
+#
+# 正則的覆蓋範圍沒有盡頭，這裡的目標是「明顯比原本寬」而不是「窮舉」。
+# 原本這份漏掉的（實測六種真實形狀的憑證，scrub() 一個都沒濾掉）：
+# JWT（`eyJ...`）、Google API key（`AIzaSy...`）、GitLab PAT（`glpat-`）、
+# Stripe（`sk_live_`，底線不是連字號，所以 `sk-` 那條擋不到）、Slack app
+# token（`xapp-`）、HuggingFace（`hf_`）。
+#
+# JWT 之所以連長 base64 那條都躲得掉，是結構問題不是清單問題：
+# descriptor.TOKEN_CHARS 含 `.`，所以整個 JWT 是「一個 token」，而
+# `^[A-Za-z0-9+/]{40,}={0,2}$` 碰到點就整條比對失敗。下面把 base64 規則
+# 拆成兩條，第二條容許以 `.` 分段（每段自己也要夠長，所以
+# `path/to/file.py` 這類正常識別字不會被誤判）。
+# 每條前綴規則後面都接一段「這串東西真的長得像憑證」的要求（字元類別
+# ＋長度），不是光看前綴就判。光看前綴會把一整類普通識別字掃掉：`npm_`
+# 命中 `npm_package_version`／`npm_config_registry`，`hf_` 命中任何
+# `hf_` 開頭的縮寫。獨有詞集合是 tr-eval Layer 1 比對的依據，濾過頭會讓
+# silent_miss 往低估偏（刪除看起來比實際安全），而且 `[REDACTED]` 會出現
+# 在 agent 真正會讀的墓碑標記上 —— 那是它用來決定要不要還原的那行字。
+_ISSUER_PREFIXES = (
+    r"sk-[A-Za-z0-9_-]{16,}|pk-[A-Za-z0-9_-]{16,}|"
+    r"(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{16,}|"
+    r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"gl(?:pat|dt)-[A-Za-z0-9_-]{16,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|"
+    r"(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{12,}|"
+    r"AIza[A-Za-z0-9_-]{30,}|ya29\.[A-Za-z0-9_-]{20,}|"
+    r"hf_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{30,}|dckr_pat_[A-Za-z0-9_-]{16,}|"
+    r"shp(?:at|ss)_[A-Za-z0-9]{20,}|SG\.[A-Za-z0-9_-]{16,}|"
+    r"lin_api_[A-Za-z0-9]{20,}|hv[sb]\.[A-Za-z0-9_-]{20,}|"
+    r"eyJ[A-Za-z0-9+/_-]{20,}"        # JWT：header 是 base64 的 `{"`
+)
+
+# 欄位名稱本身就在說這是什麼。整個 token 相等才算（或者後面直接接 `=`），
+# 不是前綴比對 —— 前綴比對會掃掉 `password_hash`、`private_key_path`、
+# `access_token_url`、`refresh_token_expiry`、`secret_key_base`、
+# `api_key_id` 這些完全無害的識別字。
+# 值本身攔不到（descriptor.TOKEN_CHARS 不含 `=`，`password=hunter2` 會被
+# 切成兩個 token），這條只保證欄位名不進封存區。
+_SECRET_FIELD_NAMES = (
+    r"apikey|api_key|secret_key|client_secret|access_token|refresh_token|"
+    r"private_key|password|passwd"
+)
+
+# 「一團不透明的東西」跟「路徑或識別字」的差別：路徑／snake_case／
+# kebab-case 是被分隔符切成一堆短字的，不透明的 base64 團塊不是。所以
+# 長度門檻要看「連續、不含 `_`/`-` 的最長一段」，不是整個 token 的長度。
+# 整個 token 長度版本（`^[A-Za-z0-9+/_-]{40,}$`）會掃掉
+# `chezmoi/private_dot_config/claude/tool-reduce`、
+# `google_compute_region_network_endpoint_group`、
+# `jkopay-payment-gateway-deployment-prod-abc123`、`session-<uuid>`。
+_B64_RUN = r"[A-Za-z0-9+/_-]*[A-Za-z0-9+/]{%d,}[A-Za-z0-9+/_-]*"
+
 SECRET_RE = re.compile(
-    r"^(sk-|pk-|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xox[baprs]-|apikey|AKIA|ASIA)"
-    r"|^[A-Za-z0-9+/]{40,}={0,2}$",
+    r"^(?:" + _ISSUER_PREFIXES + r")"
+    r"|^(?:" + _SECRET_FIELD_NAMES + r")(?:$|=)"
+    # 長 base64／base64url 團塊
+    r"|^" + (_B64_RUN % 40) + r"={0,2}$"
+    # 以 `.` 分段的長團塊（JWT、部分 signed token）。每一段都要有一長串
+    # 連續的 base64 字元，`module.uat_cluster.ns_alpha` 這類點分識別字
+    # （每段都是被 `_` 切開的短字）達不到。JWT 主要靠上面的 `eyJ` 那條
+    # 認出來，這條是第二層。
+    r"|^" + (_B64_RUN % 14) + r"(?:\." + (_B64_RUN % 14) + r")+={0,2}$",
     re.I)
 
 

@@ -28,7 +28,7 @@ import re
 import sys
 
 import store
-from jsonl_io import filter_full_mode, read_jsonl
+from jsonl_io import filter_full_mode, is_full_mode, read_jsonl
 
 # session id 的字元集合刻意收緊：只認字母、數字、下底線、連字號，不含
 # `.` 或 `/`——擋掉 `--session ../../../../etc` 這種路徑穿越寫法，不需要
@@ -246,13 +246,25 @@ def main():
     # 成本還是會被算在 full 的節省上。restores.jsonl 沒有 mode 欄位，
     # 一次還原就是一次還原，不分模式。
     shadow_skip = [0]
+    all_tombstones = read_jsonl(os.path.join(base, "tombstones.jsonl"), read_skip)
+    # 還原紀錄本身沒有 mode 欄位（一次還原就是一次還原），但它指向的墓碑
+    # 有。指到 shadow 墓碑的還原也要一起排除，否則一個純 shadow 的封存區
+    # 會印出「決策 0 筆、墓碑 0 個、還原 1 次」——三個數字互相矛盾，而且
+    # 那個 1 描述的是一次根本沒有從輸出裡消失過的段落。查不到對應墓碑的
+    # 孤兒還原照算（那仍然是一次確認的還原，只是紀錄檔缺了一半）。
+    shadow_handles = {t.get("handle") for t in all_tombstones
+                      if not is_full_mode(t)}
+    restores = []
+    for rec in read_jsonl(os.path.join(base, "restores.jsonl"), read_skip):
+        if rec.get("handle") in shadow_handles:
+            shadow_skip[0] += 1
+        else:
+            restores.append(rec)
     r = rollup(filter_full_mode(
                    read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip),
                    shadow_skip),
-               filter_full_mode(
-                   read_jsonl(os.path.join(base, "tombstones.jsonl"), read_skip),
-                   shadow_skip),
-               read_jsonl(os.path.join(base, "restores.jsonl"), read_skip))
+               filter_full_mode(all_tombstones, shadow_skip),
+               restores)
     r["records_skipped"] += read_skip[0]
     r["shadow_records_excluded"] = shadow_skip[0]
     if a.json:
