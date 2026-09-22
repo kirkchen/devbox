@@ -11,6 +11,8 @@
 | `outcomes.py` | 從 Claude Code transcript 收 subagent 執行結果，以 `tool_use_id` 為 key |
 | `review.py` | 覆盤：決策紀錄 ⋈ 實際結果 |
 | `run_eval.py` | 對標註好的 eval set 跑 Jev 計分 |
+| `transcript.py` | 從 subagent transcript 取 dispatch prompt 與 handback 報告。兩支 hook 共用的唯一萃取實作 |
+| `backfill_corpus.py` | 用真報告重評既有 corpus（合成 SubagentStop 餵給 hook，不另外實作評分） |
 
 eval 資料集另外放在 `~/.local/share/model-router-eval/`，因為裡面有工作專案的 prompt 內容，不進 dotfiles repo。
 
@@ -49,14 +51,15 @@ JUDGE_SUBAGENT_OUTPUT=1
 | `ROUTER_NOTIFY` | `applied` | `model-router.py` |
 | `ARCHIVE_SUBAGENT_REPORTS` | `0` | `archive-subagent-report.sh` |
 | `JUDGE_SUBAGENT_OUTPUT` | `0` | `judge-subagent-output.sh` |
-| `ROUTER_HOME` | `~/.config/claude/model-router` | `model-router.py`（找 policy 與 questions） |
+| `ROUTER_HOME` | `~/.config/claude/model-router` | 三支 hook（找 policy、questions、`transcript.py`） |
 | `ROUTER_LOG` | `$ROUTER_HOME/decisions.jsonl` | `model-router.py`、`tune.py` |
 | `ROUTER_API` | `https://api.typesafe.ai/v1/systemone` | `model-router.py`（測試用） |
 | `ROUTER_TIMEOUT` | `2.5`（秒） | `model-router.py` |
 | `ROUTER_PROJECTS` | `~/.claude/projects/*` | `tune.py` |
 | `SUBAGENT_REPORT_DIR` | `~/.local/share/model-router-eval/reports` | `archive-subagent-report.sh` |
 | `EVAL_CORPUS` | `~/.local/share/model-router-eval/corpus.jsonl` | `judge-subagent-output.sh` |
-| `EVAL_DIR` | `~/.local/share/model-router-eval` | `select_layer2.py`、`merge_layer2.py`、`tune.py` |
+| `EVAL_DIR` | `~/.local/share/model-router-eval` | `select_layer2.py`、`merge_layer2.py`、`tune.py`、`backfill_corpus.py` |
+| `CLAUDE_PROJECTS` | `~/.claude/projects` | `backfill_corpus.py`（找 subagent transcript） |
 
 ### 檔案在哪
 
@@ -139,8 +142,16 @@ Jev 失敗時 `error` 填原因、`model_applied` 為 `null`，dispatch 照原�
 
 `hooks/judge-subagent-output.sh`，SubagentStop 的 **async** command hook，不阻塞 handback。
 
-從 `agent_transcript_path` 的第一則 user 訊息取回當初的 dispatch prompt，配上 `last_assistant_message`，
-送 Jev 問四題（`completeness_questions.json`）：
+從 `agent_transcript_path` 取回當初的 dispatch prompt（第一則 user 訊息）與 subagent 實際交回的
+報告，送 Jev 問四題（`completeness_questions.json`）：
+
+**報告不是 `last_assistant_message`。** 那個欄位是 subagent 把報告交回 caller 之後留下的收尾句，
+實測大量是字串 `Report delivered.`（17 字元）。真正的報告在 transcript 裡 `SubagentHandback`
+這個 tool call 的 `message` 欄位。兩者差 13.6 倍（中位數 293 vs 2,992 字元）。
+
+萃取由 `transcript.py` 負責，judge 與 archiver 共用。兩邊各寫一份 jq 正是 2026-09-22 兩邊
+一起取錯欄位的原因，理由同 `policy.py` 被線上 hook 與離線 `tune.py` 共用。
+corpus 與存檔都記 `report_source`（`handback` / `last_message`），分得出哪些列是完整報告。
 
 | question | 問什麼 |
 |---|---|
@@ -202,6 +213,16 @@ are accepted but currently have lower accuracy」。
 Claude Code 不保留 subagent 產出，session 結束後 `outputFile` 會被清掉。
 實測 204 筆歷史 dispatch 只剩 2 筆可還原，所以歷史資料只拿來看「任務形態 → tier」的粗訊號，
 不當品質基準。真正的 corpus 從 Layer 1 開啟之後開始累積。
+
+subagent transcript 本身在磁碟上留得比較久，所以 Layer 1 用錯欄位那段期間的列可以事後重評：
+
+```sh
+$R/backfill_corpus.py            # 只報告：多少列可重評
+$R/backfill_corpus.py --apply    # 重評並換檔，原檔備份成 .bak-<時間>
+```
+
+**已知未處理**：corpus 有部分列是重複的 `agent_id`（同一個 agent 的 SubagentStop 觸發了
+2-5 次，實測 100 列裡有 26 列重複）。回填照原樣保留，沒有去重；Layer 2 抽樣時要留意。
 
 ## 自動調校與人工的分界
 
