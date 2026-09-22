@@ -1130,5 +1130,241 @@ class TestMainEndToEnd(unittest.TestCase):
         self.assertIn("1 筆", r.stdout)
 
 
+# ---------------------------------------------------------------------------
+# task-10: tr-tune, 門檻重放與調校
+# ---------------------------------------------------------------------------
+
+tr_tune = load("tr_tune", "executable_tr-tune.py")
+
+TUNE_PATH = os.path.join(TR, "executable_tr-tune.py")
+
+SCORED = [
+    {"decision_id": "s1", "tool": "Bash", "chars_before": 4000, "ts_ms": 1,
+     "chunks": [
+        {"i": 0, "chars": 1000, "dropped": False, "distinctive": [], "scores": {"noise": 0.9, "uniq": 0.1}},
+        {"i": 1, "chars": 1000, "dropped": True,  "distinctive": ["x1"], "scores": {"noise": 0.9, "uniq": 0.1}},
+        {"i": 2, "chars": 1000, "dropped": False, "distinctive": ["x2"], "scores": {"noise": 0.55, "uniq": 0.2}},
+        {"i": 3, "chars": 1000, "dropped": False, "distinctive": [], "scores": {"noise": 0.9, "uniq": 0.1}}]},
+]
+
+
+class TestReplay(unittest.TestCase):
+    def test_position_floor_survives_replay(self):
+        """重放要走同一份 drop_policy.decide，頭尾規則不能在離線消失。"""
+        r = tr_tune.replay(SCORED, {"noise_min": 0.5, "uniq_max": 0.9,
+                                    "min_chunks": 3, "max_drop_ratio": 0.6})
+        self.assertEqual(r["dropped"], 2)          # 只有 i=1、i=2，頭尾不動
+        self.assertEqual(r["saved"], 2000)
+
+    def test_higher_threshold_saves_less(self):
+        lo = tr_tune.replay(SCORED, {"noise_min": 0.5, "uniq_max": 0.9,
+                                     "min_chunks": 3, "max_drop_ratio": 0.6})
+        hi = tr_tune.replay(SCORED, {"noise_min": 0.95, "uniq_max": 0.9,
+                                     "min_chunks": 3, "max_drop_ratio": 0.6})
+        self.assertLess(hi["saved"], lo["saved"])
+
+
+class TestSearchSafety(unittest.TestCase):
+    def test_rejects_candidates_worse_than_baseline(self):
+        """先鎖死危險的錯誤：沉默誤刪率不得高於現行，才在子集合裡比節省。"""
+        cands = tr_tune.search(SCORED, baseline_silent_miss=0.0,
+                               later_text={"s1": "x2 and x2 again"})
+        self.assertTrue(all(c["silent_miss_rate"] <= 0.0 for c in cands))
+
+    def test_sorted_by_saving_within_safe_set(self):
+        cands = tr_tune.search(SCORED, baseline_silent_miss=1.0, later_text={"s1": ""})
+        self.assertTrue(cands)
+        saves = [c["saved"] for c in cands]
+        self.assertEqual(saves, sorted(saves, reverse=True))
+
+    def test_refuses_without_human_baseline(self):
+        with self.assertRaises(tr_tune.BaselineTooThin):
+            tr_tune.check_baseline({"labelled": 3, "agreement": 0.9, "new_since": 0})
+        with self.assertRaises(tr_tune.BaselineTooThin):
+            tr_tune.check_baseline({"labelled": 50, "agreement": 0.4, "new_since": 0})
+        with self.assertRaises(tr_tune.BaselineTooThin):
+            tr_tune.check_baseline({"labelled": 50, "agreement": 0.9, "new_since": 900})
+        tr_tune.check_baseline({"labelled": 50, "agreement": 0.9, "new_since": 10})
+
+
+class TestSearchGridWithNoQualifyingCandidateIsEmpty(unittest.TestCase):
+    """網格裡每個組合都超標時，search() 要老實回傳空清單，不是硬湊一個
+    「反正分數最低」的候選出來——呼叫端（main()）靠這個空清單決定要不要
+    寫檔，回傳非空清單等於製造一個假的安全候選。"""
+
+    def test_impossible_ceiling_yields_no_candidates(self):
+        cands = tr_tune.search(SCORED, baseline_silent_miss=-1.0,
+                               later_text={"s1": "x1 and x1 again"})
+        self.assertEqual(cands, [])
+
+    def test_explicit_grid_with_only_unsafe_entries_is_empty(self):
+        grid = [{"noise_min": 0.5, "uniq_max": 0.9, "min_chunks": 3, "max_drop_ratio": 0.6}]
+        cands = tr_tune.search(SCORED, baseline_silent_miss=0.0,
+                               later_text={"s1": "x1 and x1 again"}, grid=grid)
+        self.assertEqual(cands, [])
+
+
+class TestReplayTeleratesMalformedRecords(unittest.TestCase):
+    """decisions.jsonl 是 store._append 盡力而為寫出來的檔案，跟 tr-eval／
+    tr-stats 面對的是同一種半寫壞風險——重放遇到形狀不對的紀錄要跳過，
+    不能讓一筆壞紀錄中斷整批重算。"""
+
+    def test_missing_chunks_key_does_not_crash(self):
+        r = tr_tune.replay([{"decision_id": "x1", "tool": "Bash"}],
+                           {"noise_min": 0.5, "uniq_max": 0.9,
+                            "min_chunks": 3, "max_drop_ratio": 0.6})
+        self.assertEqual(r, {"saved": 0, "dropped": 0})
+
+    def test_chunks_not_a_list_does_not_crash(self):
+        r = tr_tune.replay([{"decision_id": "x1", "tool": "Bash", "chunks": "nope"}],
+                           {"noise_min": 0.5, "uniq_max": 0.9,
+                            "min_chunks": 3, "max_drop_ratio": 0.6})
+        self.assertEqual(r, {"saved": 0, "dropped": 0})
+
+    def test_non_dict_decision_is_skipped(self):
+        r = tr_tune.replay(["oops"] + SCORED,
+                           {"noise_min": 0.5, "uniq_max": 0.9,
+                            "min_chunks": 3, "max_drop_ratio": 0.6})
+        self.assertEqual(r, {"saved": 2000, "dropped": 2})
+
+
+def _write_jsonl(path, records):
+    with open(path, "w", encoding="utf-8") as fh:
+        for r in records:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+class TestTuneMainEndToEnd(unittest.TestCase):
+    """search()／check_baseline() 的單元測試證明了規則本身正確；這裡走
+    subprocess 執行 main()，驗證兩道閘門真的接在一起：沒有 --apply 什麼都
+    不寫、有 --apply 但基準不合格會拒絕並回傳非零、基準合格但候選是空集合
+    也不寫、基準合格且有候選才寫檔。"""
+
+    def _run(self, home, thresholds_path, extra_args=(), transcript_dir=None):
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_THRESHOLDS=thresholds_path,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=transcript_dir or tempfile.mkdtemp())
+        return subprocess.run([sys.executable, TUNE_PATH, *extra_args],
+                              capture_output=True, text=True, env=env)
+
+    def test_missing_store_root_does_not_crash(self):
+        home = os.path.join(tempfile.mkdtemp(), "does-not-exist-yet")
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_without_apply_writes_nothing_even_with_valid_baseline(self):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"), SCORED)
+        with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
+            json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("只是列出候選", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_apply_without_baseline_file_refuses_and_writes_nothing(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds, extra_args=("--apply",))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("拒絕套用", r.stdout)
+        self.assertIn("人工基準只有 0 筆", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_apply_with_thin_baseline_refuses_with_reason(self):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
+            json.dump({"labelled": 50, "agreement": 0.4, "new_since": 0}, fh)
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds, extra_args=("--apply",))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("拒絕套用", r.stdout)
+        self.assertIn("一致率", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_apply_with_no_qualifying_candidate_leaves_thresholds_untouched(self):
+        # 中間段 i=1 在任何網格組合下都會被刪（noise=1.0、uniq=0.0 蓋過整
+        # 個網格範圍），而且它的獨有詞在 later transcript 裡出現兩次——
+        # 每個候選的沉默誤刪率都會 > 0，現行（production）紀錄裡這段卻沒被
+        # 刪過（dropped=False），現行沉默誤刪率是 0，於是沒有任何候選能
+        # 通過「不得高於現行」的篩選。
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        decision = {"decision_id": "e1", "session_id": "sess-e1", "tool": "Bash",
+                    "chars_before": 300, "ts_ms": 1_700_000_000_000,
+                    "chunks": [
+                        {"i": 0, "chars": 100, "dropped": False, "distinctive": [],
+                         "scores": {"noise": 0.1, "uniq": 0.9}},
+                        {"i": 1, "chars": 100, "dropped": False, "distinctive": ["kaboom"],
+                         "scores": {"noise": 1.0, "uniq": 0.0}},
+                        {"i": 2, "chars": 100, "dropped": False, "distinctive": [],
+                         "scores": {"noise": 0.1, "uniq": 0.9}}]}
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"), [decision])
+        with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
+            json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
+
+        transcript_dir = tempfile.mkdtemp()
+        _write_transcript(transcript_dir, "proj1", "sess-e1", [
+            {"type": "assistant", "timestamp": _iso(1_700_000_000_000 + 1000),
+             "message": {"content": [{"type": "text",
+                                      "text": "kaboom appears here and again kaboom"}]}}])
+
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds, extra_args=("--apply",), transcript_dir=transcript_dir)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("沒有合格的候選", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_apply_with_qualifying_candidate_writes_thresholds(self):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        decision = {"decision_id": "g1", "session_id": "sess-g1", "tool": "Bash",
+                    "chars_before": 1100, "ts_ms": 1_700_000_000_000,
+                    "chunks": [
+                        {"i": 0, "chars": 50, "dropped": False, "distinctive": [],
+                         "scores": {"noise": 0.1, "uniq": 0.9}},
+                        {"i": 1, "chars": 500, "dropped": True, "distinctive": ["safe1"],
+                         "scores": {"noise": 0.9, "uniq": 0.05}},
+                        {"i": 2, "chars": 500, "dropped": True, "distinctive": ["safe2"],
+                         "scores": {"noise": 0.85, "uniq": 0.1}},
+                        {"i": 3, "chars": 50, "dropped": False, "distinctive": [],
+                         "scores": {"noise": 0.1, "uniq": 0.9}}]}
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"), [decision])
+        with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
+            json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
+
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds, extra_args=("--apply",))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("已套用", r.stdout)
+        self.assertTrue(os.path.exists(thresholds))
+        with open(thresholds, encoding="utf-8") as fh:
+            written = json.load(fh)
+        self.assertEqual(set(written.keys()),
+                         {"noise_min", "uniq_max", "min_chunks", "max_drop_ratio"})
+
+    def test_allow_worse_is_loud_in_output(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds, extra_args=("--allow-worse",))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("--allow-worse", r.stdout)
+        self.assertIn("已解除", r.stdout)
+        self.assertIn("更危險", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+
 if __name__ == "__main__":
     unittest.main()
