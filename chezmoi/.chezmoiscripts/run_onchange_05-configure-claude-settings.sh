@@ -252,6 +252,27 @@ if command -v jq &>/dev/null; then
     judge_json=$(jq -n --arg cmd "$judge_cmd" '{"type":"command","command":$cmd,"async":true}')
     ensure_hook "SubagentStop" "$judge_cmd" "$judge_json"
 
+    # -- PostToolUse: tool-reduce（用 Jev 把冗餘段落換成可還原的墓碑） --
+    # 預設不作用：要在 ~/.config/claude/typesafe.env 設 TOOL_REDUCE_MODE（shadow/full）。
+    # 阻塞式：async hook 的 stdout 不會被採用，而這支要回傳 updatedToolOutput。
+    # 自帶 2.5 秒硬性 timeout，任何異常都 fail-open（不輸出、exit 0）。
+    reduce_cmd="~/.config/claude/hooks/tool-reduce.py"
+    reduce_json=$(jq -n --arg cmd "$reduce_cmd" '{"type":"command","command":$cmd,"timeout":6}')
+    ensure_hook_with_matcher "PostToolUse" "*" "$reduce_cmd" "$reduce_json"
+
+    # -- PreToolUse: tool-reduce 的直接讀取守衛 --
+    # 只觀察不阻擋：agent 不走 tr-restore 而直接讀存放區檔案時補記一筆還原遙測。
+    # 那份遙測是 tr-eval / tr-tune 的地面真值，漏掉等於少一半訊號。
+    guard_cmd="~/.config/claude/hooks/tr-guard.py"
+    guard_json=$(jq -n --arg cmd "$guard_cmd" '{"type":"command","command":$cmd,"timeout":5}')
+    ensure_hook_with_matcher "PreToolUse" "Bash|Read" "$guard_cmd" "$guard_json"
+
+    # -- SessionEnd: 清掉這個 session 的段落原文 --
+    # 原文只活在 session 生命週期內；archive/ 的紀錄不受影響。
+    cleanup_cmd="~/.config/claude/hooks/tr-cleanup.sh"
+    cleanup_json=$(jq -n --arg cmd "$cleanup_cmd" '{"type":"command","command":$cmd,"async":true,"timeout":10}')
+    ensure_hook "SessionEnd" "$cleanup_cmd" "$cleanup_json"
+
     # -- PreCompact: transcript backup --
     backup_cmd='mkdir -p .claude/backups && cp "$CLAUDE_TRANSCRIPT_PATH" ".claude/backups/$(date +%Y%m%d-%H%M%S)-transcript.jsonl" 2>/dev/null || true'
     backup_json=$(jq -n --arg cmd "$backup_cmd" '{"type":"command","command":$cmd,"async":true,"timeout":10}')
