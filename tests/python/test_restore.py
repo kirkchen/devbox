@@ -1,5 +1,5 @@
 # tests/python/test_restore.py
-import sys, os, json, tempfile, time, subprocess, importlib.util, importlib.machinery, unittest
+import sys, os, io, json, tempfile, time, subprocess, importlib.util, importlib.machinery, unittest
 from unittest import mock
 
 BASE = os.path.join(os.path.dirname(__file__), "../..")
@@ -288,11 +288,11 @@ class TestGuardMainFailOpen(unittest.TestCase):
         self.assertEqual(rec["tool"], "Bash")
 
 
-class TestSessionIdFallback(unittest.TestCase):
-    """tr-restore 的 session_id()：TOOL_REDUCE_SESSION 沒設時退而求其次找
-    存放區底下最新異動的 session 目錄。兩個陷阱：archive/ 不能被選中
-    （它只存 jsonl 紀錄，從不存墓碑原文），存放區根目錄本身不存在時要
-    好好回傳空字串，不能讓例外逸出。"""
+class TestCandidateSessions(unittest.TestCase):
+    """tr-restore 的 candidate_sessions()：TOOL_REDUCE_SESSION 沒設時，
+    回傳存放區底下「每一個」session 目錄，最新異動的排前面。兩個陷阱：
+    archive/ 不能出現在清單裡（它只存 jsonl 紀錄，從不存墓碑原文），
+    存放區根目錄本身不存在時要好好回傳空清單，不能讓例外逸出。"""
 
     def setUp(self):
         self.root = tempfile.mkdtemp()
@@ -311,28 +311,103 @@ class TestSessionIdFallback(unittest.TestCase):
         os.utime(p, (t, t))
         return p
 
-    def test_picks_most_recently_modified_session_dir(self):
+    def test_lists_every_session_dir_newest_first(self):
         self._mkdir("sess-old", -100)
         self._mkdir("sess-new", 0)
-        self.assertEqual(tr_restore.session_id(), "sess-new")
+        self.assertEqual(tr_restore.candidate_sessions(), ["sess-new", "sess-old"])
 
     def test_archive_dir_is_excluded_even_when_newest(self):
         self._mkdir("sess-real", -100)
         self._mkdir("archive", 0)  # newer mtime than the real session dir
-        self.assertEqual(tr_restore.session_id(), "sess-real")
+        self.assertEqual(tr_restore.candidate_sessions(), ["sess-real"])
 
     def test_only_archive_dir_present_returns_empty(self):
         self._mkdir("archive", 0)
-        self.assertEqual(tr_restore.session_id(), "")
+        self.assertEqual(tr_restore.candidate_sessions(), [])
 
     def test_missing_store_root_returns_empty(self):
         os.environ["TOOL_REDUCE_HOME"] = os.path.join(self.root, "does-not-exist")
-        self.assertEqual(tr_restore.session_id(), "")
+        self.assertEqual(tr_restore.candidate_sessions(), [])
 
-    def test_explicit_session_env_wins_over_fallback(self):
+    def test_explicit_session_env_wins_over_the_scan(self):
         os.environ["TOOL_REDUCE_SESSION"] = "sess-explicit"
         self._mkdir("sess-newer", 0)
-        self.assertEqual(tr_restore.session_id(), "sess-explicit")
+        self.assertEqual(tr_restore.candidate_sessions(), ["sess-explicit"])
+
+
+class TestRestoreAcrossConcurrentSessions(unittest.TestCase):
+    """C3：TOOL_REDUCE_SESSION 沒設時 tr-restore 以前只看 max(dirs, mtime)，
+    而分支裡沒有任何東西會設那個環境變數（hook 不設，README 的註冊說明也
+    不設），所以那個退路就是正式路徑。開第二個 Claude Code session 就會
+    打穿它，而同時開兩個 session 是很正常的工作方式。
+
+    第二層代價更貴：還原失敗不會寫 restores.jsonl，於是 tr-eval 把那個
+    段落算成 clean 或 silent_miss 而不是 restored —— 整個設計裡唯一「無
+    誤判」的訊號，偏偏在刪錯的當下弄丟。"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self._env_patch = mock.patch.dict(os.environ, {}, clear=False)
+        self._env_patch.start()
+        os.environ.pop("TOOL_REDUCE_SESSION", None)
+        os.environ["TOOL_REDUCE_HOME"] = self.root
+        # session A 先寫，session B 20 毫秒後寫，B 的目錄 mtime 比較新
+        self.a = store.Store("aaaa111111", root=self.root)
+        self.a.save_chunk("aaaa111111.3", "session A's deleted passage")
+        now = time.time()
+        os.utime(self.a.path, (now - 1, now - 1))
+        self.b = store.Store("bbbb222222", root=self.root)
+        self.b.save_chunk("bbbb222222.1", "session B's deleted passage")
+
+    def tearDown(self):
+        self._env_patch.stop()
+
+    def _run(self, handle):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["tr-restore", handle]), \
+             mock.patch.object(sys, "stdout", out):
+            rc = tr_restore.main()
+        return rc, out.getvalue()
+
+    def test_older_sessions_handle_is_still_restorable(self):
+        rc, out = self._run("aaaa111111.3")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "session A's deleted passage\n")
+
+    def test_newest_sessions_handle_still_works(self):
+        rc, out = self._run("bbbb222222.1")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "session B's deleted passage\n")
+
+    def test_the_restore_is_recorded_against_the_owning_session(self):
+        """遙測要記在真正存著那個段落的 session 目錄底下，不是記到剛好
+        最新異動的那個。archive/ 那一份無論如何都會有。"""
+        self._run("aaaa111111.3")
+        live = os.path.join(self.a.path, "restores.jsonl")
+        self.assertTrue(os.path.exists(live), "restore not recorded for session A")
+        with open(live, encoding="utf-8") as fh:
+            self.assertEqual(json.loads(fh.readline())["handle"], "aaaa111111.3")
+        self.assertFalse(os.path.exists(os.path.join(self.b.path, "restores.jsonl")))
+        arch = os.path.join(self.root, "archive", "restores.jsonl")
+        self.assertTrue(os.path.exists(arch))
+
+    def test_a_genuinely_unknown_handle_still_fails(self):
+        """掃過每個目錄不能變成「什麼都找得到」—— 沒有人存過的 handle
+        還是要非零結束。"""
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", ["tr-restore", "cccc333333.9"]), \
+             mock.patch.object(sys, "stderr", err):
+            rc = tr_restore.main()
+        self.assertEqual(rc, 1)
+        self.assertIn("no such handle", err.getvalue())
+
+    def test_a_malformed_session_dir_does_not_abort_the_scan(self):
+        """存放區底下混進一個名稱不合 store 規範的目錄時，要略過它繼續找，
+        不是讓 Store 的 ValueError 逸出成 traceback。"""
+        os.makedirs(os.path.join(self.root, "not a session"), exist_ok=True)
+        rc, out = self._run("aaaa111111.3")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "session A's deleted passage\n")
 
 
 class TestHandleValidationBeforeFilesystemAccess(unittest.TestCase):

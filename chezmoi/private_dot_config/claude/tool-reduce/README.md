@@ -34,7 +34,7 @@
 tr-restore a3f2c91b0d.3
 ```
 
-還原的原文會印到 stdout，同時記一筆到 `restores.jsonl`——這是後續 eval 的 ground truth，「墓碑被還原」是無誤判的訊號。`handle` 格式是 `<decision_id>.<段落序號>`（`^[A-Za-z0-9]+\.\d+$`）；不帶 `--session`、也沒設 `TOOL_REDUCE_SESSION` 時，`tr-restore` 會自動挑存放區裡最新異動的 session 目錄（排除 `archive/`）。
+還原的原文會印到 stdout，同時記一筆到 `restores.jsonl`——這是後續 eval 的 ground truth，「墓碑被還原」是無誤判的訊號。`handle` 格式是 `<decision_id>.<段落序號>`（`^[A-Za-z0-9]+\.\d+$`）；沒設 `TOOL_REDUCE_SESSION` 時，`tr-restore` 會掃過存放區底下每一個 session 目錄（排除 `archive/`，最新異動的先找）找這個 handle——`decision_id` 是 sha256 + `os.urandom`，handle 全域唯一，不會有歧義。同時開兩個 Claude Code session 時這很重要：只挑「最新異動的那一個」會讓另一個 session 的墓碑還原不了。
 
 段落原文只存在對應 session 的存放區（預設 `~/.claude/tool-reduce/<session_id>/`，權限 700），session 結束就被 `tr-cleanup.sh` 刪掉——tool output 可能帶密鑰，不跨 session 保留。想直接讀存放區檔案而不透過 `tr-restore`，也算一次還原，會被 `tr-guard.py`（PreToolUse）觀察到並記錄，兩條路徑各記各的、不重疊。
 
@@ -122,6 +122,6 @@ tr-restore a3f2c91b0d.3
 | `TOOL_REDUCE_SIZE_GATE` | `2000`（字元） | tool output 短於這個長度，整份放行不判斷 |
 | `TOOL_REDUCE_TIMEOUT` | `2.5`（秒） | 呼叫 Jev 的逾時 |
 | `TOOL_REDUCE_MAX_CHUNKS` | `16` | 單份 tool result 最多切幾段 |
-| `TOOL_REDUCE_SESSION` | 無（`tr-restore` 自動挑最新異動的 session 目錄） | `tr-restore` 指定去哪個 session 存放區找 handle |
+| `TOOL_REDUCE_SESSION` | 無（`tr-restore` 掃過每一個 session 目錄） | `tr-restore` 限定只去某一個 session 存放區找 handle |
 | `TOOL_REDUCE_TRANSCRIPT_DIR` | `~/.claude/projects` | `tr-eval`／`tr-tune` 找 transcript 比對獨有詞的目錄（測試用覆寫點） |
 | `TOOL_REDUCE_API` | `https://api.typesafe.ai/v1/systemone` | Jev API endpoint（測試用覆寫點） |

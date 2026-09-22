@@ -15,37 +15,67 @@ sys.path.insert(0, os.path.expanduser(os.environ.get(
 import store
 
 
-def session_id():
-    """決定去哪個 session 存放區找 handle。
+def candidate_sessions():
+    """要去找 handle 的 session 目錄清單，最新異動的排前面。
 
-    TOOL_REDUCE_SESSION 沒設的話，退而求其次找存放區底下最新異動的
-    session 目錄。存放區根目錄一律走 store.root()（TOOL_REDUCE_HOME 優先，
-    否則 store.ROOT_DEFAULT）—— 跟 store.Store 自己在沒帶 root 參數時的
-    解析公式同一份，不是這裡另外重算一次；否則設了 TOOL_REDUCE_HOME 會
-    搬動 Store 實際讀寫的目錄，卻搬不動這裡在找的目錄，兩邊各看各的存放區。
+    TOOL_REDUCE_SESSION 有設就只看那一個。沒設的話回傳存放區底下「所有」
+    的 session 目錄 —— 不是只挑最新異動的那一個。
+
+    先前這裡是 `max(dirs, key=mtime)`，而且分支裡沒有任何東西會設
+    TOOL_REDUCE_SESSION（hook 不設，README 的註冊說明也不設），所以那個
+    退路就是正式路徑。開第二個 Claude Code session 就會打穿它：session A
+    存了 aaaa111111.3，session B 在 20 毫秒後存了 bbbb222222.1，
+    `tr-restore aaaa111111.3` 會去 B 的目錄找、以「no such handle」非零
+    結束，而那個段落好端端地躺在隔壁目錄。只要第二個 session 還活著，
+    第一個 session 的墓碑就永久還原不了 —— 同時開兩個 session 是很正常
+    的工作方式。
+
+    第二層代價更貴：還原失敗不會寫 restores.jsonl，於是 tr-eval 把那個
+    段落算成 clean 或 silent_miss 而不是 restored。restored 是整個設計裡
+    唯一「無誤判」的訊號，偏偏在刪錯的當下弄丟。
+
+    handle 是全域唯一的（decision_id 是 sha256 + os.urandom(4)），所以
+    「掃過每個 session 目錄找這個 handle」不會有歧義。mtime 由新到舊排，
+    常見情況（就是自己這個 session 的墓碑）第一次就命中。
 
     archive/ 只存紀錄（decisions／tombstones／restores 三份 jsonl），從不
-    存墓碑原文，選到它去 load_chunk 一定撲空，所以明確排除，不能讓它被
-    「最新異動」選中 —— 尤其 archive/ 底下的 jsonl 每次 reduce 都會被
-    附加寫入，mtime 常常比任何一個 session 目錄都新。
+    存墓碑原文，明確排除。
 
     存放區根目錄本身不存在時（全新環境、一次 reduce 都還沒發生過）
     os.listdir 會丟 FileNotFoundError（OSError 的子類別）；當作「沒有
-    任何 session 可選」，回傳空字串，讓呼叫端的 load_chunk 自然找不到
-    handle、以非零結束，而不是讓例外逸出到頂層印出 traceback。
+    任何 session 可選」，回傳空清單，讓呼叫端自然找不到 handle、以非零
+    結束，而不是讓例外逸出到頂層印出 traceback。
     """
     s = os.environ.get("TOOL_REDUCE_SESSION")
     if s:
-        return s
+        return [s]
     root = store.root()
     try:
         dirs = [d for d in os.listdir(root)
                 if d != "archive" and os.path.isdir(os.path.join(root, d))]
     except OSError:
-        return ""
-    if not dirs:
-        return ""
-    return max(dirs, key=lambda d: os.path.getmtime(os.path.join(root, d)))
+        return []
+    return sorted(dirs, key=lambda d: os.path.getmtime(os.path.join(root, d)),
+                  reverse=True)
+
+
+def find_chunk(handle):
+    """掃過每個候選 session 目錄，回傳第一個存得到這個 handle 的
+    (Store, text)；都找不到回 (None, None)。
+
+    store.Store 對不合法的 session id 會丟 ValueError（見 store.py 對
+    containment 的說明）。這裡逐一略過那種目錄而不是讓例外逸出：存放區
+    底下如果混進一個名稱不合規的目錄，那是「這個目錄不是我們寫的」，不是
+    「這次還原該印 traceback」。"""
+    for sid in candidate_sessions():
+        try:
+            st = store.Store(sid, root=store.root())
+        except ValueError:
+            continue
+        text = st.load_chunk(handle)
+        if text is not None:
+            return st, text
+    return None, None
 
 
 def main():
@@ -53,7 +83,7 @@ def main():
         print("usage: tr-restore <handle>", file=sys.stderr)
         return 2
     handle = sys.argv[1]
-    # Handle 格式在碰任何檔案系統之前就先擋掉。session_id() 在沒設
+    # Handle 格式在碰任何檔案系統之前就先擋掉。candidate_sessions() 在沒設
     # TOOL_REDUCE_SESSION 時會列存放區目錄，那跟這個 handle 本身合不合法
     # 無關；但一個明顯不合法的 handle（例如路徑穿越 `../../etc/passwd`）
     # 應該在做那件事、或建構 Store、或任何一次檔案系統存取之前就先被拒絕，
@@ -62,8 +92,7 @@ def main():
     if not store.HANDLE_RE.match(handle):
         print(f"tr-restore: invalid handle: {handle}", file=sys.stderr)
         return 1
-    st = store.Store(session_id(), root=store.root())
-    text = st.load_chunk(handle)
+    st, text = find_chunk(handle)
     if text is None:
         print(f"tr-restore: no such handle: {handle}", file=sys.stderr)
         return 1
