@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -1386,6 +1387,17 @@ class TestReplayTeleratesMalformedRecords(unittest.TestCase):
         self.assertEqual(r, {"saved": 2000, "dropped": 2})
 
 
+def _filler_decisions(n, prefix="filler"):
+    """n 筆可重放、但不影響排名的決策紀錄：中間段的分數落在網格的最寬鬆
+    那一端之外，所以任何候選門檻都不會刪它們，saved 的排名完全由測試自己
+    關心的那筆決策決定。單純用來過 tr-tune 的 MIN_DECISIONS 那一關。"""
+    return [{"decision_id": f"{prefix}{i}", "session_id": f"sess-{prefix}{i}",
+             "tool": "Bash", "chars_before": 300, "ts_ms": 1_700_000_000_000,
+             "chunks": [{"i": j, "chars": 100, "dropped": False, "distinctive": [],
+                         "scores": {"noise": 0.0, "uniq": 1.0}} for j in range(3)]}
+            for i in range(n)]
+
+
 def _write_jsonl(path, records):
     with open(path, "w", encoding="utf-8") as fh:
         for r in records:
@@ -1491,7 +1503,10 @@ class TestTuneMainEndToEnd(unittest.TestCase):
                          "scores": {"noise": 1.0, "uniq": 0.0}},
                         {"i": 2, "chars": 100, "dropped": False, "distinctive": [],
                          "scores": {"noise": 0.1, "uniq": 0.9}}]}
-        _write_jsonl(os.path.join(archive, "decisions.jsonl"), [decision])
+        # MIN_DECISIONS 這一關要先過，才走得到「沒有合格的候選」那個分支
+        # ——多出來的填充決策沒有獨有詞、也不影響候選篩選。
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"),
+                     [decision] + _filler_decisions(tr_tune.MIN_DECISIONS))
         with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
             json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
 
@@ -1522,7 +1537,8 @@ class TestTuneMainEndToEnd(unittest.TestCase):
                          "scores": {"noise": 0.85, "uniq": 0.1}},
                         {"i": 3, "chars": 50, "dropped": False, "distinctive": [],
                          "scores": {"noise": 0.1, "uniq": 0.9}}]}
-        _write_jsonl(os.path.join(archive, "decisions.jsonl"), [decision])
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"),
+                     [decision] + _filler_decisions(tr_tune.MIN_DECISIONS))
         with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
             json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
 
@@ -1546,6 +1562,134 @@ class TestTuneMainEndToEnd(unittest.TestCase):
         self.assertIn("已解除", r.stdout)
         self.assertIn("更危險", r.stdout)
         self.assertFalse(os.path.exists(thresholds))
+
+
+
+
+class TestTuneRunsUnderChezmoiDeployedNames(unittest.TestCase):
+    """C2：tr-tune 用 importlib 載入兄弟檔案 executable_tr-eval.py，而
+    chezmoi 部署時會把 `executable_` 前綴拿掉（`chezmoi target-path` 的
+    答案是 ~/.config/claude/tool-reduce/tr-eval.py）。只認原始碼樹裡的
+    名字的話，部署後 exec_module 在 import 階段就 FileNotFoundError，連
+    main() 都進不去 —— 而 tr-tune 正是「先在 2.2% 上線、之後再從遙測重新
+    推導門檻」那句話的整個機制。
+
+    既有的九個 subprocess 測試全部指向原始碼樹（TUNE_PATH），也就是一個
+    在正式環境永遠不會出現的檔案佈局，所以一個都沒抓到。這裡把部署後的
+    命名真的建出來再跑。"""
+
+    def _deploy(self):
+        """照 chezmoi 的命名規則把這個目錄擺出來：`executable_` 前綴拿掉，
+        其餘檔名不動。"""
+        out = tempfile.mkdtemp()
+        for name in os.listdir(TR):
+            src = os.path.join(TR, name)
+            if not os.path.isfile(src):
+                continue
+            deployed = name[len("executable_"):] if name.startswith("executable_") else name
+            shutil.copyfile(src, os.path.join(out, deployed))
+        return out
+
+    def test_deployed_layout_has_no_executable_prefix(self):
+        """先釘住這個測試本身的前提，免得它悄悄變成在測原始碼樹。"""
+        d = self._deploy()
+        self.assertTrue(os.path.exists(os.path.join(d, "tr-tune.py")))
+        self.assertTrue(os.path.exists(os.path.join(d, "tr-eval.py")))
+        self.assertFalse(os.path.exists(os.path.join(d, "executable_tr-eval.py")))
+
+    def test_tr_tune_runs_from_the_deployed_layout(self):
+        d = self._deploy()
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_THRESHOLDS=os.path.join(tempfile.mkdtemp(), "t.json"),
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        r = subprocess.run([sys.executable, os.path.join(d, "tr-tune.py")],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("FileNotFoundError", r.stderr)
+        self.assertIn("只是列出候選", r.stdout)
+
+    def test_tr_stats_and_tr_eval_also_run_from_the_deployed_layout(self):
+        """兩支不載入兄弟檔案，本來就沒事——一起釘住，才能確定這條命名
+        規則只有 tr-tune 這一個受害者，不是漏看了別的。"""
+        d = self._deploy()
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        for name in ("tr-stats.py", "tr-eval.py"):
+            r = subprocess.run([sys.executable, os.path.join(d, name)],
+                               capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, f"{name}: {r.stdout}{r.stderr}")
+            self.assertNotIn("Traceback", r.stderr)
+
+
+class TestTuneRefusesToTuneOnNoEvidence(unittest.TestCase):
+    """I7：tr_eval.summarize 用 `n = len(rows) or 1`，所以封存區是空的時候
+    每個候選都是 silent_miss_rate == 0.0、saved == 0 —— 132 格全部通過
+    「不得高於現行」這關、全部並列，排序穩定，cands[0] 就是網格的第一格。
+    配上一份看起來完全合格的 human_baseline.json，--apply 會寫下整個網格
+    裡最激進的那組門檻（noise_min=0.4 uniq_max=0.1）。對照實測的 noise
+    p50 是 0.33，那會刪掉每一份 tool result 的一大塊。
+
+    人工基準那道閘門只驗三個自填數字的形狀，從來沒有對照過封存區裡到底
+    有沒有作業 —— docstring 說這道閘門的存在是為了「門檻不會由一個替自己
+    改考卷的迴圈推導出來」，但它從沒要求考卷存在。"""
+
+    def _archive_with_baseline(self, decisions):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        if decisions:
+            _write_jsonl(os.path.join(archive, "decisions.jsonl"), decisions)
+        with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
+            json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
+        return home
+
+    def _apply(self, home):
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_THRESHOLDS=thresholds,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        r = subprocess.run([sys.executable, TUNE_PATH, "--apply"],
+                           capture_output=True, text=True, env=env)
+        return r, thresholds
+
+    def test_empty_archive_refuses_instead_of_writing_the_grids_first_cell(self):
+        r, thresholds = self._apply(self._archive_with_baseline([]))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("拒絕套用", r.stdout)
+        self.assertIn("可重放的決策紀錄", r.stdout)
+        self.assertFalse(os.path.exists(thresholds),
+                         "wrote thresholds derived from an empty archive")
+
+    def test_a_handful_of_decisions_is_still_refused(self):
+        r, thresholds = self._apply(self._archive_with_baseline(SCORED * 3))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("拒絕套用", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_enough_decisions_but_every_candidate_tied_at_zero_is_refused(self):
+        """數量夠了還有第二種「分不出高下」：每個候選都省 0 字元，
+        cands[0] 一樣只是網格的第一格。"""
+        home = self._archive_with_baseline(_filler_decisions(tr_tune.MIN_DECISIONS))
+        r, thresholds = self._apply(home)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("拒絕套用", r.stdout)
+        self.assertIn("省下 0 字元", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_listing_mode_says_so_instead_of_silently_ranking_noise(self):
+        home = self._archive_with_baseline(SCORED * 3)
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_THRESHOLDS=os.path.join(tempfile.mkdtemp(), "t.json"),
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        r = subprocess.run([sys.executable, TUNE_PATH],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("不足以當作依據", r.stdout)
 
 
 if __name__ == "__main__":

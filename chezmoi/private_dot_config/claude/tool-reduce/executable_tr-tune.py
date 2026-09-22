@@ -43,14 +43,44 @@ import store
 # 容錯規則，見 jsonl_io.py 的說明）。executable_tr-eval.py 檔名帶連字號、
 # 不是合法的 import 識別字，跟既有測試（tests/python/test_eval.py 的
 # load()）用同一招：spec_from_file_location 直接載入這個檔案。
-_eval_spec = importlib.util.spec_from_file_location(
-    "tr_eval", os.path.join(HERE, "executable_tr-eval.py"))
-tr_eval = importlib.util.module_from_spec(_eval_spec)
-_eval_spec.loader.exec_module(tr_eval)
+#
+# 兩個檔名都要試：chezmoi 部署時會把 `executable_` 前綴拿掉（實測
+# `chezmoi target-path` 的答案是 ~/.config/claude/tool-reduce/tr-eval.py），
+# 所以「原始碼樹裡叫 executable_tr-eval.py、真正跑的環境裡叫 tr-eval.py」
+# 是兩個都會出現的名字。只認前者的話，這支工具部署後在 import 階段就
+# FileNotFoundError，連 main() 都進不去——而它正是「先在 2.2% 上線、之後
+# 再從遙測重新推導門檻」那句話的整個機制。tr-stats／tr-eval 沒有這個問題，
+# 它們不載入兄弟檔案。
+_EVAL_NAMES = ("executable_tr-eval.py", "tr-eval.py")
+
+
+def _load_tr_eval():
+    for name in _EVAL_NAMES:
+        path = os.path.join(HERE, name)
+        if os.path.exists(path):
+            spec = importlib.util.spec_from_file_location("tr_eval", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise ImportError(
+        "tr-eval not found next to tr-tune (looked for "
+        + " / ".join(_EVAL_NAMES) + " in " + HERE + ")")
+
+
+tr_eval = _load_tr_eval()
 
 MIN_LABELLED = 20        # 人工基準至少要幾筆
 MIN_AGREEMENT = 0.7      # 人機一致率下限
 MAX_NEW_SINCE = 200      # 基準之後新增樣本超過這個數就算過期
+# 自動調校至少要有幾筆可重放的決策紀錄。網格有 132 格，紀錄太少的時候
+# 每一格都是在對雜訊過擬合——而且有一個更難看的失效模式：紀錄是空的時候
+# 每個候選的 silent_miss_rate 都是 0.0、saved 都是 0，132 個候選全部通過
+# 「不得高於現行」這關、全部並列，排序穩定，cands[0] 就是網格的第一格，
+# 於是 --apply 會寫下整個網格裡最激進的一組門檻（noise_min=0.4
+# uniq_max=0.1）。對照實測的 noise p50 是 0.33，那會刪掉每一份 tool
+# result 的一大塊。人工基準那道閘門只驗三個自填數字的「形狀」，從來沒有
+# 對照過封存區裡到底有沒有作業。
+MIN_DECISIONS = 50
 
 
 def _thresholds_path():
@@ -249,6 +279,11 @@ def main():
         ceiling = current["silent_miss_rate"]
         print(f"現行沉默誤刪率 {current['silent_miss_rate']:.1%}（候選不得高於此值）\n")
 
+    # 有多少筆決策真的能重放（有段落、形狀過得了 _chunk_lists）。這是
+    # 「有沒有作業可以打分數」的唯一實測數字，跟人工基準那三個自填的欄位
+    # 無關 —— 見 MIN_DECISIONS 旁的說明。
+    replayable = sum(1 for d in decisions if _chunk_lists(d)[0])
+
     cands = search(decisions, ceiling, later)
     print(f"  {'noise_min':>10}{'uniq_max':>10}{'省下':>12}{'段數':>7}{'沉默誤刪':>10}")
     for c in cands[:10]:
@@ -256,6 +291,9 @@ def main():
               f"{c['dropped']:>7}{c['silent_miss_rate']:>10.1%}")
     if not cands:
         print("\n沒有合格的候選（網格裡沒有任何組合的沉默誤刪率不高於現行），門檻維持不變。")
+    elif replayable < MIN_DECISIONS:
+        print(f"\n注意：封存區只有 {replayable} 筆可重放的決策紀錄（需要至少 "
+              f"{MIN_DECISIONS} 筆才能 --apply）。上面的排名不足以當作依據。")
 
     if not a.apply:
         print("\n（只是列出候選，不套用、不寫任何檔案。要套用加 --apply。）")
@@ -286,9 +324,28 @@ def main():
         print(f"補標之後更新 {bpath}。穩態下大約每累積 200 筆補標 10 筆。")
         return 1
 
+    # 人工基準是「有沒有人在外面把關」；這一關是「裡面到底有沒有作業」。
+    # 前者只驗三個自填數字的形狀，從來不對照封存區，所以一份看起來完全
+    # 合格的 human_baseline.json 配上一個空的封存區，過去會一路寫到底。
+    if replayable < MIN_DECISIONS:
+        print(f"\n拒絕套用：封存區只有 {replayable} 筆可重放的決策紀錄，"
+              f"需要至少 {MIN_DECISIONS} 筆。")
+        print("紀錄太少時 132 格的網格幾乎都是在對雜訊過擬合；一筆都沒有的時候"
+              "每一格並列（省 0 字元、沉默誤刪 0%），排序後的第一名只是網格的"
+              "第一格，也就是最激進的那一組門檻。")
+        return 1
+
     if not cands:
         print("\n沒有合格的候選，門檻不變、未寫入任何檔案。")
         return 0
+
+    # 全部並列在「省 0 字元」時，cands[0] 不是量出來的最佳解，只是網格的
+    # 第一格（排序是穩定的）。這跟「沒有合格的候選」不一樣：那是有結論、
+    # 結論是維持現狀；這是根本分不出高下。
+    if not any(c["saved"] > 0 for c in cands):
+        print(f"\n拒絕套用：{len(cands)} 個合格候選全部省下 0 字元，分不出高下。"
+              "排序後的第一名只是網格的第一格，不是量出來的結果。")
+        return 1
 
     best = cands[0]
     thresholds_path = _thresholds_path()
