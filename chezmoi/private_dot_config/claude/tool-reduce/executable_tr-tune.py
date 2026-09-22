@@ -30,6 +30,7 @@ import itertools
 import json
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -64,32 +65,48 @@ class BaselineTooThin(Exception):
     """人工基準不足以支撐自動調校。"""
 
 
+def _validate_field(b, field, label):
+    """人工基準的三個欄位（labelled／agreement／new_since）型別不對時，
+    不能『退回預設值 0 再去比大小』——labelled／agreement 是『數字越大越
+    安全』，退回 0 剛好會被『太少／太低』這關擋下來，意外安全；但
+    new_since 是『數字越大越危險』，退回 0 等於讓『基準是否過期』這關
+    永遠不會觸發，沉默放行。同一套『型別不對就當 0』的預設規則，套在
+    比較方向相反的兩種欄位上會有相反的安全後果——不該讓比較方向決定
+    型別錯誤時是否安全。所以型別不對、缺欄位（.get 回傳 None，跟明確寫
+    null 是同一種『這個數字不可信』）、布林值（True/False 是 int 的子
+    類別，isinstance 檢查會誤放行，必須排除）、或負值，一律直接判定這
+    關不通過，不看比較方向、也不嘗試補一個看似合理的預設值。"""
+    v = b.get(field)
+    if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+        raise BaselineTooThin(
+            f"人工基準欄位「{field}」（{label}）缺漏或型別不對："
+            f"{v!r}，需要是一個非負數字")
+    return v
+
+
 def check_baseline(b):
     """人工基準是唯一從迴圈外進來的訊號。不合格就拒絕套用並說明原因，
     不是印警告接著照套——這支函式只做「行不行」的判斷，說明文字留給
-    呼叫端決定怎麼呈現。"""
+    呼叫端決定怎麼呈現。三個欄位的型別驗證（_validate_field）在比較
+    數值大小之前，任何一個欄位型別不對就直接拒絕，不會被其他欄位的
+    正常值掩蓋。"""
     if not isinstance(b, dict):
         b = {}
-    labelled = b.get("labelled", 0)
-    if not isinstance(labelled, (int, float)) or isinstance(labelled, bool):
-        labelled = 0
+
+    labelled = _validate_field(b, "labelled", "人工標註筆數")
     if labelled < MIN_LABELLED:
         raise BaselineTooThin(
-            f"人工基準只有 {labelled} 筆，需要至少 {MIN_LABELLED} 筆")
+            f"人工基準只有 {labelled:g} 筆，需要至少 {MIN_LABELLED} 筆")
 
-    agreement = b.get("agreement", 0)
-    if not isinstance(agreement, (int, float)) or isinstance(agreement, bool):
-        agreement = 0
+    agreement = _validate_field(b, "agreement", "人機一致率")
     if agreement < MIN_AGREEMENT:
         raise BaselineTooThin(
             f"人機一致率 {agreement:.0%} 低於門檻 {MIN_AGREEMENT:.0%}")
 
-    new_since = b.get("new_since", 0)
-    if not isinstance(new_since, (int, float)) or isinstance(new_since, bool):
-        new_since = 0
+    new_since = _validate_field(b, "new_since", "基準之後新增樣本數")
     if new_since > MAX_NEW_SINCE:
         raise BaselineTooThin(
-            f"基準之後新增 {new_since} 筆，超過 {MAX_NEW_SINCE}，基準已過期")
+            f"基準之後新增 {new_since:g} 筆，超過 {MAX_NEW_SINCE}，基準已過期")
 
 
 def _chunk_lists(d):
@@ -234,7 +251,23 @@ def main():
 
     bpath = os.path.join(base, "human_baseline.json")
     try:
-        b = json.load(open(bpath, encoding="utf-8")) if os.path.exists(bpath) else {}
+        if os.path.exists(bpath):
+            with open(bpath, encoding="utf-8") as fh:
+                b = json.load(fh)
+        else:
+            b = {}
+    except json.JSONDecodeError as e:
+        # 檔案存在但不是合法 JSON（寫壞、寫到一半）——跟 store.load_chunk
+        # 之前修過的同一類問題：讓例外原樣往外逸出會印出直譯器的原生
+        # traceback（內含這支腳本的絕對路徑），洩漏內部實作路徑，而且不是
+        # 「拒絕套用並說明原因」該有的樣子。這裡攔下來，改用跟
+        # BaselineTooThin 同一種措辭拒絕，不印檔案的原始例外內容。
+        print(f"\n拒絕套用：{bpath} 不是合法的 JSON（{e.msg}，第 {e.lineno} 行第 "
+              f"{e.colno} 欄），人工基準檔案已損毀或格式不對")
+        print("需要先修好這份檔案（或重新產生）才能自動調校。")
+        return 1
+
+    try:
         check_baseline(b)
     except BaselineTooThin as e:
         print(f"\n拒絕套用：{e}")
@@ -247,9 +280,22 @@ def main():
 
     best = cands[0]
     thresholds_path = _thresholds_path()
-    os.makedirs(os.path.dirname(thresholds_path), exist_ok=True)
-    with open(thresholds_path, "w", encoding="utf-8") as fh:
-        json.dump({k: best[k] for k in drop_policy.DEFAULTS}, fh, indent=2)
+    out_dir = os.path.dirname(thresholds_path)
+    os.makedirs(out_dir, exist_ok=True)
+    # 寫到同目錄下的暫存檔再 os.replace，不直接開 thresholds_path 寫——後者
+    # 中途被中斷（行程被殺、磁碟滿）會留下一份寫到一半的截斷檔案。
+    # drop_policy.load() 讀到解析失敗的 JSON 時會退回 DEFAULTS，所以爆炸
+    # 半徑本來就不大，但 os.replace 在同一個檔案系統上是原子操作，讓這個
+    # 失敗模式直接不可能發生，而不只是可以從容復原。
+    fd, tmp_path = tempfile.mkstemp(dir=out_dir, prefix=".thresholds-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({k: best[k] for k in drop_policy.DEFAULTS}, fh, indent=2)
+        os.replace(tmp_path, thresholds_path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
     print(f"\n已套用：noise_min={best['noise_min']} uniq_max={best['uniq_max']}"
           f"  寫入 {thresholds_path}")
     if a.allow_worse:

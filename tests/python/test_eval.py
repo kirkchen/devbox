@@ -1247,6 +1247,79 @@ class TestSearchSafety(unittest.TestCase):
         tr_tune.check_baseline({"labelled": 50, "agreement": 0.9, "new_since": 10})
 
 
+class TestBaselineFieldValidationFailsClosed(unittest.TestCase):
+    """fix round 1（coordinator review）：check_baseline 原本對三個欄位都用
+    『型別不對就退回預設值 0 再比大小』——labelled／agreement 是『數字越大
+    越安全』，退回 0 剛好會被『太少／太低』這關擋下來，意外安全；但
+    new_since 是『數字越大越危險』，退回 0 等於讓『基準是否過期』這關永遠
+    不會觸發，沉默放行。同一套預設規則、兩種比較方向、相反的安全後果——
+    這是人工基準（全系統唯一從迴圈外進來的訊號）唯一的把關邏輯，失守比
+    完全沒有這道閘門更糟，因為它讓自動調校看起來像是有人在把關。
+
+    這裡鎖住的規則：型別不對、缺欄位、None、布林值、負值，三個欄位、
+    每一種情況都要讓這一關直接判定不通過，不看比較方向，不能被『退回 0』
+    悄悄救回來變成合格。"""
+
+    VALID = {"labelled": 50, "agreement": 0.9, "new_since": 10}
+    FIELDS = ("labelled", "agreement", "new_since")
+
+    def _bad(self, field, value):
+        b = dict(self.VALID)
+        b[field] = value
+        return b
+
+    def test_wrong_type_string_fails_closed_for_every_field(self):
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, "not-a-number"))
+
+    def test_wrong_type_list_fails_closed_for_every_field(self):
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, ["x"]))
+
+    def test_none_fails_closed_for_every_field(self):
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, None))
+
+    def test_boolean_fails_closed_for_every_field(self):
+        # True/False 是 int 的子類別；isinstance(True, (int, float)) 是
+        # True，沒有另外排除的話會被當成合法的 1／0 悄悄放行。
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, True))
+
+    def test_negative_fails_closed_for_every_field(self):
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, -1))
+
+    def test_missing_field_fails_closed_for_every_field(self):
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                b = dict(self.VALID)
+                del b[field]
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(b)
+
+    def test_the_exact_reported_regression_new_since_string_and_null_now_refuse(self):
+        # coordinator 回報時原本會 PASS 的兩個具體案例，鎖進去防止回歸。
+        with self.assertRaises(tr_tune.BaselineTooThin):
+            tr_tune.check_baseline(
+                {"labelled": 50, "agreement": 0.9, "new_since": "not-a-number"})
+        with self.assertRaises(tr_tune.BaselineTooThin):
+            tr_tune.check_baseline({"labelled": 50, "agreement": 0.9, "new_since": None})
+
+    def test_valid_baseline_still_passes(self):
+        tr_tune.check_baseline(dict(self.VALID))  # 不丟例外就算過
+
+
 class TestSearchGridWithNoQualifyingCandidateIsEmpty(unittest.TestCase):
     """網格裡每個組合都超標時，search() 要老實回傳空清單，不是硬湊一個
     「反正分數最低」的候選出來——呼叫端（main()）靠這個空清單決定要不要
@@ -1329,13 +1402,37 @@ class TestTuneMainEndToEnd(unittest.TestCase):
         self.assertFalse(os.path.exists(thresholds))
 
     def test_apply_without_baseline_file_refuses_and_writes_nothing(self):
+        # human_baseline.json 完全不存在 -> b == {} -> 每個欄位都是「缺漏」
+        # （fix round 1：缺欄位跟型別不對現在共用同一條 _validate_field
+        # 路徑，不再是「退回 0 再比大小」，訊息點名第一個不合格的欄位
+        # labelled，不再是「只有 0 筆」這種暗示『我們知道數字是 0』的措辭）。
         home = tempfile.mkdtemp()
         os.makedirs(os.path.join(home, "archive"), exist_ok=True)
         thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
         r = self._run(home, thresholds, extra_args=("--apply",))
         self.assertEqual(r.returncode, 1)
         self.assertIn("拒絕套用", r.stdout)
-        self.assertIn("人工基準只有 0 筆", r.stdout)
+        self.assertIn("labelled", r.stdout)
+        self.assertIn("缺漏或型別不對", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_apply_with_unparseable_baseline_file_refuses_without_traceback(self):
+        # human_baseline.json 存在但不是合法 JSON（寫壞／寫到一半）——
+        # fix round 1 之前這裡讓 json.JSONDecodeError 原樣往外逸出，main()
+        # 沒接住，印出直譯器原生 traceback（內含這支腳本在這台機器上的
+        # 絕對路徑），既洩漏內部路徑，也不是「拒絕套用並說明原因」。
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        with open(os.path.join(archive, "human_baseline.json"), "w", encoding="utf-8") as fh:
+            fh.write("{this is not valid json,,,")
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = self._run(home, thresholds, extra_args=("--apply",))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("拒絕套用", r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn(TR, r.stderr)     # 這支腳本所在的 repo 路徑不能外洩
+        self.assertEqual(r.stderr, "")
         self.assertFalse(os.path.exists(thresholds))
 
     def test_apply_with_thin_baseline_refuses_with_reason(self):
