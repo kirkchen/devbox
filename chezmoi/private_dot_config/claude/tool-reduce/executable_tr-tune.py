@@ -28,6 +28,7 @@ import argparse
 import importlib.util
 import itertools
 import json
+import math
 import os
 import sys
 import tempfile
@@ -75,12 +76,23 @@ def _validate_field(b, field, label):
     型別錯誤時是否安全。所以型別不對、缺欄位（.get 回傳 None，跟明確寫
     null 是同一種『這個數字不可信』）、布林值（True/False 是 int 的子
     類別，isinstance 檢查會誤放行，必須排除）、或負值，一律直接判定這
-    關不通過，不看比較方向、也不嘗試補一個看似合理的預設值。"""
+    關不通過，不看比較方向、也不嘗試補一個看似合理的預設值。
+
+    fix round 2：同一個家族還有一個成員——`nan`。任何跟 `nan` 的比較
+    （`<`、`>`、`==`）都是 False，所以寫成比較式的關卡對 `nan` 永遠不會
+    觸發，三個欄位同時失守（不像 fix round 1 的 bug 只打穿 new_since
+    一個方向）。`json.loads` 預設接受裸的 `NaN`／`Infinity`／`-Infinity`
+    字面值，所以這不是理論上的輸入形狀。`math.isfinite` 一次擋掉 `nan`
+    跟兩個無窮——`inf` 也要擋：`new_since=inf` 本來就會被
+    `> MAX_NEW_SINCE` 正確擋下來，但 `labelled=inf`／`agreement=inf` 會
+    通過『越大越好』方向的比較，跟原本 `new_since` 那個 bug 是同一個
+    『比較方向決定型別錯誤是否安全』的錯誤形狀，只是這次換成 `inf`。"""
     v = b.get(field)
-    if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+    if (not isinstance(v, (int, float)) or isinstance(v, bool)
+            or not math.isfinite(v) or v < 0):
         raise BaselineTooThin(
             f"人工基準欄位「{field}」（{label}）缺漏或型別不對："
-            f"{v!r}，需要是一個非負數字")
+            f"{v!r}，需要是一個非負且有限的數字")
     return v
 
 

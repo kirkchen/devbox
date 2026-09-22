@@ -1316,6 +1316,31 @@ class TestBaselineFieldValidationFailsClosed(unittest.TestCase):
         with self.assertRaises(tr_tune.BaselineTooThin):
             tr_tune.check_baseline({"labelled": 50, "agreement": 0.9, "new_since": None})
 
+    def test_nan_fails_closed_for_every_field(self):
+        # fix round 2：任何跟 nan 的比較都是 False，寫成比較式的關卡對
+        # nan 永遠不會觸發——跟 fix round 1 的 new_since bug 同一個家族，
+        # 但這次三個欄位同時失守，不是只有一個比較方向。
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, float("nan")))
+
+    def test_positive_infinity_fails_closed_for_every_field(self):
+        # new_since=inf 光靠既有的 > MAX_NEW_SINCE 就會被擋下來，但
+        # labelled=inf／agreement=inf 會通過『越大越好』方向的比較——
+        # 跟 new_since 的 bug 一樣是比較方向決定型別錯誤是否安全，只是
+        # 這次換成 inf。math.isfinite 統一擋掉，不靠比較方向。
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, float("inf")))
+
+    def test_negative_infinity_fails_closed_for_every_field(self):
+        for field in self.FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(tr_tune.BaselineTooThin):
+                    tr_tune.check_baseline(self._bad(field, float("-inf")))
+
     def test_valid_baseline_still_passes(self):
         tr_tune.check_baseline(dict(self.VALID))  # 不丟例外就算過
 
