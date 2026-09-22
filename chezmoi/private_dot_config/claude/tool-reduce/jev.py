@@ -76,6 +76,14 @@ def scores(answers, n_chunks):
         for name in names:
             a = answers.get(f"{name}_c{i}")
             v = a.get("noul") if isinstance(a, dict) else None
-            row[name] = v if isinstance(v, (int, float)) else None
+            # bool 排除在外。Python 的 bool 是 int 的子類別，所以
+            # isinstance(True, (int, float)) 是 True，`{"noul": true}`
+            # 會被當成分數 1.0 一路帶進 drop_policy.decide() 去刪文字。
+            # 每一支離線工具（tr-stats、tr-eval、tr-tune）都明確排除
+            # bool，唯獨這條線上路徑沒有——而這是三條路徑裡唯一的後果
+            # 是「刪掉文字」而不是「算錯數字」的。這也是整個 fail-open
+            # 契約唯一會反轉的地方：上游給垃圾，結果是刪除而不是放行。
+            row[name] = (v if isinstance(v, (int, float))
+                         and not isinstance(v, bool) else None)
         out.append(row)
     return out

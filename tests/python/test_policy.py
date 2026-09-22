@@ -78,5 +78,26 @@ class TestGuards(unittest.TestCase):
         self.assertTrue(d[2])  # Real dict with high noise should be dropped
 
 
+
+
+class TestBooleanScoresNeverDelete(unittest.TestCase):
+    """I5：Python 的 bool 是 int 的子類別，所以 isinstance(True, (int, float))
+    是 True。`{"noise": True, "uniq": False}` 會被當成 noise=1.0、uniq=0.0
+    一路刪下去。每一支離線工具（tr-stats、tr-eval、tr-tune）都明確排除
+    bool；唯獨這條線上路徑沒有——而這是三條路徑裡唯一的後果是「刪掉文字」
+    而不是「算錯數字」的。這也是整個 fail-open 契約唯一會反轉的地方：
+    上游給垃圾，結果是刪除而不是放行。"""
+
+    def test_boolean_scores_drop_nothing(self):
+        s = [{"noise": True, "uniq": False} for _ in range(5)]
+        self.assertEqual(policy.decide(s, [100] * 5), [False] * 5)
+
+    def test_one_boolean_field_is_enough_to_keep_the_chunk(self):
+        s = sc((0.2, 0.9), (0.9, 0.1), (0.9, 0.1), (0.2, 0.9))
+        s[1]["noise"] = True
+        s[2]["uniq"] = False
+        self.assertEqual(policy.decide(s, [100] * 4), [False] * 4)
+
+
 if __name__ == "__main__":
     unittest.main()

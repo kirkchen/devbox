@@ -79,5 +79,29 @@ class TestScores(unittest.TestCase):
         self.assertEqual(s[1], {"noise": 0.2, "uniq": None})
 
 
+
+
+class TestBooleanAnswersAreNotScores(unittest.TestCase):
+    """I5 的上游那一半：Jev 回 `{"noul": true}` 時 scores() 以前會原樣
+    保留 True，下游的 isinstance(x, (int, float)) 檢查放行、當成 1.0。
+    一次完全沒有分數的回應會造成三段被刪。"""
+
+    def test_boolean_noul_becomes_none(self):
+        answers = {}
+        for i in range(3):
+            answers[f"noise_c{i}"] = {"noul": True}
+            answers[f"uniq_c{i}"] = {"noul": False}
+        rows = jev.scores(answers, 3)
+        for row in rows:
+            self.assertIsNone(row["noise"])
+            self.assertIsNone(row["uniq"])
+
+    def test_real_numbers_still_pass_through(self):
+        answers = {"noise_c0": {"noul": 0.9}, "uniq_c0": {"noul": 0}}
+        rows = jev.scores(answers, 1)
+        self.assertEqual(rows[0]["noise"], 0.9)
+        self.assertEqual(rows[0]["uniq"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

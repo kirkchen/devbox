@@ -44,10 +44,14 @@ def decide(scores, chunk_chars, t=None):
             drop.append(False)
             continue
         noise, uniq = s.get("noise"), s.get("uniq")
+        # `not isinstance(..., bool)`：bool 是 int 的子類別，`True` 會通過
+        # isinstance(x, (int, float)) 並當成 1.0 比大小。jev.scores() 現在
+        # 也擋了一次，這裡是第二道——這是整條流程裡唯一「後果是刪掉文字」
+        # 的判斷，不該只靠上游一層。
         ok = (
             i != 0 and i != n - 1                       # 不刪頭尾
-            and isinstance(noise, (int, float))          # 分數缺漏就留
-            and isinstance(uniq, (int, float))
+            and isinstance(noise, (int, float)) and not isinstance(noise, bool)
+            and isinstance(uniq, (int, float)) and not isinstance(uniq, bool)
             and noise >= t["noise_min"]
             and uniq <= t["uniq_max"]
         )
