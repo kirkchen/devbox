@@ -1,5 +1,6 @@
 # tests/python/test_eval.py
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -513,6 +514,506 @@ class TestNonStringDescriptorDoesNotCrash(unittest.TestCase):
                       "descriptor": ["not", "a", "string"]}]
         r = stats.rollup(DECISIONS, tombstones, [])
         self.assertEqual(r["tombstone_cost"], 50)
+
+
+# ---------------------------------------------------------------------------
+# task-9: tr-eval, Layer 1 三態分類
+# ---------------------------------------------------------------------------
+
+tr_eval = load("tr_eval", "executable_tr-eval.py")
+
+EVAL_PATH = os.path.join(TR, "executable_tr-eval.py")
+
+
+class TestClassify(unittest.TestCase):
+    """三態：
+      墓碑被還原              -> restored     （確定誤刪，agent 自己救回來了）
+      沒還原但獨有詞後來出現  -> silent_miss  （agent 需要卻沒去拿，最嚴重）
+      兩者皆無                -> clean        （大概是正確的裁切）
+    """
+
+    def test_restored_wins_over_text_match(self):
+        later = {"d1": "we later mention gone_b twice: gone_b"}
+        rows = tr_eval.classify(DECISIONS, [{"handle": "d1.1"}], later)
+        self.assertEqual(next(r for r in rows if r["handle"] == "d1.1")["state"], "restored")
+
+    def test_silent_miss_needs_two_hits(self):
+        later = {"d1": "gone_c appears once only"}
+        rows = tr_eval.classify(DECISIONS, [], later)
+        self.assertEqual(next(r for r in rows if r["handle"] == "d1.2")["state"], "clean")
+        later = {"d1": "gone_c here and gone_c again"}
+        rows = tr_eval.classify(DECISIONS, [], later)
+        self.assertEqual(next(r for r in rows if r["handle"] == "d1.2")["state"], "silent_miss")
+
+    def test_clean_when_nothing_matches(self):
+        rows = tr_eval.classify(DECISIONS, [], {"d1": "unrelated text", "d2": ""})
+        self.assertEqual(next(r for r in rows if r["handle"] == "d2.1")["state"], "clean")
+
+    def test_only_dropped_chunks_are_classified(self):
+        rows = tr_eval.classify(DECISIONS, [], {"d1": "", "d2": ""})
+        self.assertEqual({r["handle"] for r in rows}, {"d1.1", "d1.2", "d2.1"})
+
+    def test_summary_counts(self):
+        rows = tr_eval.classify(DECISIONS, [{"handle": "d1.1"}],
+                                {"d1": "gone_c and gone_c", "d2": ""})
+        s = tr_eval.summarize(rows)
+        self.assertEqual(s["restored"], 1)
+        self.assertEqual(s["silent_miss"], 1)
+        self.assertEqual(s["clean"], 1)
+        self.assertAlmostEqual(s["silent_miss_rate"], 1 / 3)
+
+
+class TestBothViaValuesCountTheSame(unittest.TestCase):
+    """restores.jsonl 的 via 只是『怎麼還原的』，不是兩種不同事件
+    （task-9 correction 4）——tr-restore／direct-read 都要判成 restored，
+    同一個 handle 被兩條路徑各記一次也只能算一次還原。"""
+
+    def test_tr_restore_via_yields_restored(self):
+        rows = tr_eval.classify(DECISIONS, [{"handle": "d1.1", "via": "tr-restore"}], {})
+        self.assertEqual(next(r for r in rows if r["handle"] == "d1.1")["state"], "restored")
+
+    def test_direct_read_via_yields_restored(self):
+        rows = tr_eval.classify(
+            DECISIONS, [{"handle": "d1.2", "via": "direct-read", "tool": "Bash"}], {})
+        self.assertEqual(next(r for r in rows if r["handle"] == "d1.2")["state"], "restored")
+
+    def test_same_handle_restored_via_both_routes_counts_once(self):
+        restores = [{"handle": "d1.1", "via": "tr-restore"},
+                    {"handle": "d1.1", "via": "direct-read", "tool": "Bash"}]
+        rows = tr_eval.classify(DECISIONS, restores, {})
+        restored_rows = [r for r in rows if r["handle"] == "d1.1"]
+        self.assertEqual(len(restored_rows), 1)
+        self.assertEqual(restored_rows[0]["state"], "restored")
+        self.assertEqual(tr_eval.summarize(rows)["restored"], 1)
+
+
+class TestClassifyToleratesMalformedRecords(unittest.TestCase):
+    """decisions.jsonl／restores.jsonl 是同一批 store._append 盡力而為寫出來
+    的檔案，跟 tr-stats.rollup() 面對的是同一種半寫壞風險——classify() 收到
+    形狀不對的紀錄要退化成『這筆不算』並計進 skip_counter，不是丟例外。"""
+
+    def test_decision_missing_chunks_key_is_skipped_not_crashed(self):
+        rows = tr_eval.classify([{"decision_id": "x1", "tool": "Bash"}], [], {})
+        self.assertEqual(rows, [])
+
+    def test_decision_record_that_is_a_string_is_skipped(self):
+        rows = tr_eval.classify(["oops"] + DECISIONS, [], {"d1": "", "d2": ""})
+        self.assertEqual({r["handle"] for r in rows}, {"d1.1", "d1.2", "d2.1"})
+
+    def test_chunks_not_a_list_is_skipped(self):
+        decisions = [{"decision_id": "x1", "tool": "Bash", "chunks": "nope"}]
+        rows = tr_eval.classify(decisions, [], {})
+        self.assertEqual(rows, [])
+
+    def test_restore_record_missing_handle_does_not_crash(self):
+        rows = tr_eval.classify(DECISIONS, [{"via": "tr-restore"}, 42], {"d1": "", "d2": ""})
+        self.assertEqual({r["handle"] for r in rows}, {"d1.1", "d1.2", "d2.1"})
+        self.assertTrue(all(r["state"] != "restored" for r in rows))
+
+    def test_skip_counter_accumulates_across_decisions_and_restores(self):
+        decisions = ["oops", {"decision_id": "d1", "tool": "Bash", "chunks": "nope"}]
+        counter = [0]
+        tr_eval.classify(decisions, [None, 42], {}, skip_counter=counter)
+        self.assertEqual(counter[0], 4)  # "oops" + chunks 型別不對 + None + 42
+
+    def test_empty_store_does_not_crash(self):
+        self.assertEqual(tr_eval.classify([], [], {}), [])
+        self.assertEqual(tr_eval.summarize([])["total"], 0)
+        self.assertEqual(tr_eval.summarize([])["silent_miss_rate"], 0)
+
+
+class TestReadJsonlSharedWithStats(unittest.TestCase):
+    """read_jsonl 搬進 jsonl_io.py 共用（task-9 correction 3）：tr-eval 跟
+    tr-stats 讀的是同一批可能半寫壞的封存檔案，容錯規則跟略過計數的契約
+    只能有一份實作，不是兩支各自維護、容易漂移。"""
+
+    def test_read_jsonl_is_the_shared_implementation(self):
+        import jsonl_io
+        self.assertIs(tr_eval.read_jsonl, jsonl_io.read_jsonl)
+        self.assertIs(stats.read_jsonl, jsonl_io.read_jsonl)
+
+    def test_behaves_identically_to_stats_read_jsonl(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "mixed.jsonl")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("not even json{\n")
+                fh.write('"a string"\n')
+                fh.write(json.dumps({"decision_id": "d1"}) + "\n")
+            c1, c2 = [0], [0]
+            out1 = tr_eval.read_jsonl(p, c1)
+            out2 = stats.read_jsonl(p, c2)
+            self.assertEqual(out1, out2)
+            self.assertEqual(c1, c2)
+
+    def test_missing_file_returns_empty_list(self):
+        self.assertEqual(tr_eval.read_jsonl("/no/such/archive/decisions.jsonl"), [])
+
+
+def _iso(ms):
+    from datetime import datetime, timezone
+    return (datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+            .isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+
+
+def _write_transcript(root, project, session_id, rows):
+    d = os.path.join(root, project)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, f"{session_id}.jsonl"), "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+class TestTranscriptAfter(unittest.TestCase):
+    """transcript_after 要用 decision 的 ts_ms 當邊界，只收晚於它的訊息——
+    不是整份檔案、也不是檔案最後 N 行。比對整份檔案（含 decision 之前，
+    尤其是這次工具呼叫剛印出來、原文就在裡面的那一輪）會讓幾乎每個墓碑
+    都被判成 silent_miss（task-9 傳送的『Traps』一節指出的坑）。"""
+
+    def test_only_includes_messages_strictly_after_decision_ts(self):
+        T = 1_700_000_000_000
+        with tempfile.TemporaryDirectory() as root:
+            _write_transcript(root, "proj1", "sess-a", [
+                {"type": "user", "timestamp": _iso(T - 5000),
+                 "message": {"content": [{"type": "text", "text": "BEFORE_TOKEN"}]}},
+                {"type": "assistant", "timestamp": _iso(T + 5000),
+                 "message": {"content": [{"type": "text", "text": "AFTER_TOKEN"}]}},
+            ])
+            by_id = {"d1": {"session_id": "sess-a", "ts_ms": T}}
+            text = tr_eval.transcript_after("d1", by_id, transcript_dir=root)
+        self.assertIn("AFTER_TOKEN", text)
+        self.assertNotIn("BEFORE_TOKEN", text)
+
+    def test_message_exactly_at_decision_ts_is_not_later(self):
+        T = 1_700_000_000_000
+        with tempfile.TemporaryDirectory() as root:
+            _write_transcript(root, "proj1", "sess-a", [
+                {"type": "user", "timestamp": _iso(T),
+                 "message": {"content": [{"type": "text", "text": "EXACT_TOKEN"}]}},
+            ])
+            by_id = {"d1": {"session_id": "sess-a", "ts_ms": T}}
+            text = tr_eval.transcript_after("d1", by_id, transcript_dir=root)
+        self.assertNotIn("EXACT_TOKEN", text)
+
+    def test_non_user_assistant_rows_are_excluded_even_if_later(self):
+        T = 1_700_000_000_000
+        with tempfile.TemporaryDirectory() as root:
+            _write_transcript(root, "proj1", "sess-a", [
+                {"type": "system", "timestamp": _iso(T + 5000),
+                 "message": {"content": [{"type": "text", "text": "SYSTEM_TOKEN"}]}},
+            ])
+            by_id = {"d1": {"session_id": "sess-a", "ts_ms": T}}
+            text = tr_eval.transcript_after("d1", by_id, transcript_dir=root)
+        self.assertNotIn("SYSTEM_TOKEN", text)
+
+    def test_matches_real_project_subdirectory_layout(self):
+        # ~/.claude/projects/<project-dir>/<session-id>.jsonl —— glob 要
+        # 對得上實際佈局（root/*/session.jsonl），不是 root/session.jsonl。
+        T = 1_700_000_000_000
+        with tempfile.TemporaryDirectory() as root:
+            _write_transcript(root, "-Users-someone-Code-devbox", "sess-b", [
+                {"type": "assistant", "timestamp": _iso(T + 1000),
+                 "message": {"content": [{"type": "text", "text": "LAYOUT_TOKEN"}]}},
+            ])
+            by_id = {"d1": {"session_id": "sess-b", "ts_ms": T}}
+            text = tr_eval.transcript_after("d1", by_id, transcript_dir=root)
+        self.assertIn("LAYOUT_TOKEN", text)
+
+    def test_missing_ts_ms_returns_empty_not_whole_file(self):
+        # 沒有 ts_ms 就沒有邊界可畫——安全的預設是『沒有後來』，不是
+        # 『整份都算後來』（否則工具輸出原文本身就會被誤判成後來的引用）。
+        with tempfile.TemporaryDirectory() as root:
+            _write_transcript(root, "proj1", "sess-c", [
+                {"type": "user", "timestamp": _iso(1_700_000_000_000),
+                 "message": {"content": [{"type": "text", "text": "ANY_TOKEN"}]}},
+            ])
+            by_id = {"d1": {"session_id": "sess-c"}}
+            text = tr_eval.transcript_after("d1", by_id, transcript_dir=root)
+        self.assertEqual(text, "")
+
+    def test_unknown_decision_id_returns_empty(self):
+        self.assertEqual(tr_eval.transcript_after("nope", {}, transcript_dir="/tmp"), "")
+
+    def test_missing_session_id_returns_empty(self):
+        by_id = {"d1": {"ts_ms": 1_700_000_000_000}}
+        self.assertEqual(tr_eval.transcript_after("d1", by_id, transcript_dir="/tmp"), "")
+
+
+class TestBuildBatchDeterminism(unittest.TestCase):
+    """control 對照組用 handle 的 sha256 決定要不要收，不是 Python 內建
+    hash()（受 PYTHONHASHSEED 影響、同一支程式兩次啟動可能不同）——重跑、
+    換行程、換輸入順序都要挑到同一批（task-9 傳送的『Traps』一節）。"""
+
+    def _control_decisions(self, n, decision_id="cd1"):
+        chunks = [{"i": i, "chars": 10, "dropped": False, "distinctive": []}
+                  for i in range(n)]
+        return [{"decision_id": decision_id, "tool": "Bash", "chunks": chunks}]
+
+    def _expected_handles(self, decisions):
+        expected = set()
+        for d in decisions:
+            for c in d["chunks"]:
+                handle = f"{d['decision_id']}.{c['i']}"
+                if not c["dropped"]:
+                    h = int(hashlib.sha256(handle.encode()).hexdigest()[:8], 16)
+                    if (h % 1000) / 1000.0 >= tr_eval.CONTROL_RATE:
+                        continue
+                expected.add(handle)
+        return expected
+
+    def test_selection_matches_independent_hash_computation(self):
+        decisions = self._control_decisions(500)
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "batch.jsonl")
+            tr_eval.build_batch(decisions, [], out)
+            with open(out, encoding="utf-8") as fh:
+                got = {json.loads(l)["handle"] for l in fh}
+        self.assertEqual(got, self._expected_handles(decisions))
+        self.assertTrue(got)  # 500 個裡抽 10% 不該抽到空集合
+
+    def test_two_runs_in_same_process_pick_identical_set(self):
+        decisions = self._control_decisions(300)
+        with tempfile.TemporaryDirectory() as d:
+            out1, out2 = os.path.join(d, "b1.jsonl"), os.path.join(d, "b2.jsonl")
+            tr_eval.build_batch(decisions, [], out1)
+            tr_eval.build_batch(decisions, [], out2)
+            with open(out1, encoding="utf-8") as fh:
+                got1 = {json.loads(l)["handle"] for l in fh}
+            with open(out2, encoding="utf-8") as fh:
+                got2 = {json.loads(l)["handle"] for l in fh}
+        self.assertEqual(got1, got2)
+
+    def test_independent_of_chunk_ordering(self):
+        decisions = self._control_decisions(200)
+        shuffled = [dict(decisions[0], chunks=list(reversed(decisions[0]["chunks"])))]
+        with tempfile.TemporaryDirectory() as d:
+            out1, out2 = os.path.join(d, "a.jsonl"), os.path.join(d, "b.jsonl")
+            tr_eval.build_batch(decisions, [], out1)
+            tr_eval.build_batch(shuffled, [], out2)
+            with open(out1, encoding="utf-8") as fh:
+                got1 = {json.loads(l)["handle"] for l in fh}
+            with open(out2, encoding="utf-8") as fh:
+                got2 = {json.loads(l)["handle"] for l in fh}
+        self.assertEqual(got1, got2)
+
+    def test_deterministic_across_fresh_processes_with_different_hash_seeds(self):
+        # 反向證明沒有任何地方偷偷用了內建 hash()：PYTHONHASHSEED 兩個行程
+        # 給不同值，選出來的對照組集合必須完全一樣。
+        decisions = self._control_decisions(200)
+        with tempfile.TemporaryDirectory() as d:
+            fixture = os.path.join(d, "decisions.json")
+            with open(fixture, "w", encoding="utf-8") as fh:
+                json.dump(decisions, fh)
+            script = (
+                "import json, sys, importlib.util\n"
+                f"sys.path.insert(0, {TR!r})\n"
+                f"spec = importlib.util.spec_from_file_location('tr_eval', {EVAL_PATH!r})\n"
+                "m = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(m)\n"
+                f"decisions = json.load(open({fixture!r}, encoding='utf-8'))\n"
+                "m.build_batch(decisions, [], sys.argv[1])\n"
+            )
+            outs = []
+            for seed in ("111", "222"):
+                out = os.path.join(d, f"p-{seed}.jsonl")
+                env = dict(os.environ, PYTHONHASHSEED=seed)
+                r = subprocess.run([sys.executable, "-c", script, out],
+                                   capture_output=True, text=True, env=env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                outs.append(out)
+            handles = []
+            for out in outs:
+                with open(out, encoding="utf-8") as fh:
+                    handles.append({json.loads(l)["handle"] for l in fh})
+        self.assertEqual(handles[0], handles[1])
+
+    def test_dropped_chunks_are_always_included_bypassing_the_hash(self):
+        chunks = [{"i": i, "chars": 10, "dropped": True, "distinctive": []} for i in range(20)]
+        decisions = [{"decision_id": "dd1", "tool": "Bash", "chunks": chunks}]
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "batch.jsonl")
+            n = tr_eval.build_batch(decisions, [], out)
+        self.assertEqual(n, 20)
+
+    def test_batch_items_carry_no_state_or_score_fields(self):
+        # 給 Layer 2 judge 的批次要拿掉『Layer 1 已經判過什麼』，不然標註
+        # 只是在複述 classify() 的結論，不是獨立判斷。
+        decisions = DECISIONS
+        rows = tr_eval.classify(decisions, [], {"d1": "", "d2": ""})
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "batch.jsonl")
+            tr_eval.build_batch(decisions, rows, out)
+            with open(out, encoding="utf-8") as fh:
+                items = [json.loads(l) for l in fh]
+        for it in items:
+            self.assertEqual(set(it.keys()), {"handle", "tool", "chars", "control"})
+
+    def test_malformed_decision_in_batch_input_does_not_crash(self):
+        decisions = ["oops", {"decision_id": "x1", "tool": "Bash", "chunks": "nope"}]
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "batch.jsonl")
+            n = tr_eval.build_batch(decisions, [], out)
+        self.assertEqual(n, 0)
+
+
+class TestStoreRootResolvedFreshEachCall(unittest.TestCase):
+    """main() 走 store.root()，且每次執行都重新解析，不能在模組載入當下
+    凍結成常數——這正是本專案先前真的撞過的 bug 形狀（task-9 correction 2）。
+    這裡不 mock，直接讓兩次呼叫在同一個 process 裡分別指向兩個不同的暫存
+    目錄，反向證明沒有任何地方把根目錄快取住。"""
+
+    def test_module_level_constant_is_not_frozen_at_import(self):
+        self.assertFalse(hasattr(tr_eval, "HOME"),
+                          "store root must not be frozen into a module-level "
+                          "constant computed at import time")
+
+    def test_two_calls_in_one_process_see_two_different_roots(self):
+        root_a, root_b = tempfile.mkdtemp(), tempfile.mkdtemp()
+        st_a = store.Store("sess-a", root=root_a)
+        st_a.record_decision({"decision_id": "a1", "tool": "Bash",
+                              "chars_before": 100,
+                              "chunks": [{"i": 0, "chars": 10, "dropped": True,
+                                         "distinctive": []}]})
+
+        def _run(home):
+            buf = io.StringIO()
+            env = {"TOOL_REDUCE_HOME": home,
+                   "TOOL_REDUCE_TRANSCRIPT_DIR": tempfile.mkdtemp()}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(sys, "argv", ["tr-eval.py"]), \
+                 contextlib.redirect_stdout(buf):
+                rc = tr_eval.main()
+            self.assertEqual(rc, 0)
+            return buf.getvalue()
+
+        out_a = _run(root_a)
+        out_b = _run(root_b)
+        self.assertIn("墓碑 1 個", out_a)
+        self.assertIn("墓碑 0 個", out_b)
+
+
+class TestFreshOrAbsentStoreDoesNotCrash(unittest.TestCase):
+    """全新安裝、還沒發生過任何一次 reduce 的環境——連存放區根目錄都不
+    存在——tr-eval 必須印出全 0，不是 traceback（task-9 global constraint）。
+    走 subprocess 驗證連 main() 之外、argparse／print 那段實際印出來的東西
+    也一起驗證到。"""
+
+    def _run(self, home, extra_args=(), transcript_dir=None):
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=transcript_dir or tempfile.mkdtemp())
+        return subprocess.run([sys.executable, EVAL_PATH, *extra_args],
+                              capture_output=True, text=True, env=env)
+
+    def test_missing_store_root_prints_zeros_not_a_traceback(self):
+        home = os.path.join(tempfile.mkdtemp(), "does-not-exist-yet")
+        r = self._run(home)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("Traceback", r.stdout)
+        self.assertIn("墓碑 0 個", r.stdout)
+
+    def test_empty_archive_dir_prints_zeros(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        r = self._run(home)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("墓碑 0 個", r.stdout)
+
+    def test_batch_flag_with_empty_store_writes_empty_file(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        out = os.path.join(tempfile.mkdtemp(), "batch.jsonl")
+        r = self._run(home, extra_args=("--batch", out))
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue(os.path.exists(out))
+        self.assertEqual(open(out, encoding="utf-8").read(), "")
+
+
+class TestRecordsSkippedSurfacedByCli(unittest.TestCase):
+    """一份被截斷的封存區（store._append 盡力而為設計下的正常結果）算出來
+    的三態分佈要帶著『有東西被略過』的信號，不是看起來一樣自信的 0
+    （task-9 correction 3：inherit tr-stats 的略過計數契約）。"""
+
+    def test_truncated_archive_is_reported_not_silently_dropped(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write("truncated garbage not json{\n")
+            fh.write(json.dumps({"decision_id": "d1", "session_id": "s1", "tool": "Bash",
+                                "chars_before": 100,
+                                "chunks": [{"i": 0, "chars": 10, "dropped": True,
+                                           "distinctive": []}]}) + "\n")
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        r = subprocess.run([sys.executable, EVAL_PATH], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("1 筆紀錄格式不對", r.stdout)
+        self.assertIn("墓碑 1 個", r.stdout)
+
+    def test_clean_archive_prints_nothing_extra(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write(json.dumps({"decision_id": "d1", "session_id": "s1", "tool": "Bash",
+                                "chars_before": 100, "chunks": []}) + "\n")
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        r = subprocess.run([sys.executable, EVAL_PATH], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("略過", r.stdout)
+
+
+class TestMainEndToEnd(unittest.TestCase):
+    """main() 的接線：restores.jsonl 真的會影響印出來的還原率、--batch
+    真的會寫出可讀的檔案，不只是單元層級的 classify()／build_batch() 本身
+    正確。"""
+
+    def test_restore_record_flows_through_main(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write(json.dumps({"decision_id": "d1", "session_id": "s1", "tool": "Bash",
+                                "chars_before": 100,
+                                "chunks": [{"i": 0, "chars": 10, "dropped": True,
+                                           "distinctive": ["only_once"]}]}) + "\n")
+        with open(os.path.join(home, "archive", "restores.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write(json.dumps({"handle": "d1.0", "via": "direct-read",
+                                "tool": "Bash"}) + "\n")
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        r = subprocess.run([sys.executable, EVAL_PATH], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("墓碑 1 個", r.stdout)
+        self.assertIn("100.0%", r.stdout)  # 唯一一個墓碑被還原，還原率 100%
+
+    def test_batch_flag_writes_file_and_reports_count(self):
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, "archive"), exist_ok=True)
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "w",
+                 encoding="utf-8") as fh:
+            fh.write(json.dumps({"decision_id": "d1", "session_id": "s1", "tool": "Bash",
+                                "chars_before": 100,
+                                "chunks": [{"i": 0, "chars": 10, "dropped": True,
+                                           "distinctive": []},
+                                          {"i": 1, "chars": 10, "dropped": False,
+                                           "distinctive": []}]}) + "\n")
+        out = os.path.join(tempfile.mkdtemp(), "batch.jsonl")
+        env = dict(os.environ, TOOL_REDUCE_HOME=home,
+                   TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp())
+        r = subprocess.run([sys.executable, EVAL_PATH, "--batch", out],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0)
+        with open(out, encoding="utf-8") as fh:
+            lines = [json.loads(l) for l in fh]
+        # 唯一一個被刪的段落 (d1.0) 一定在；唯一一個對照組候選 (d1.1) 依
+        # sha256("d1.1") 算出來的分位數是 0.236，落在 10% 抽樣門檻之外。
+        self.assertEqual({l["handle"] for l in lines}, {"d1.0"})
+        self.assertIn("1 筆", r.stdout)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ import re
 import sys
 
 import store
+from jsonl_io import read_jsonl
 
 # session id 的字元集合刻意收緊：只認字母、數字、下底線、連字號，不含
 # `.` 或 `/`——擋掉 `--session ../../../../etc` 這種路徑穿越寫法，不需要
@@ -38,36 +39,10 @@ import store
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def read_jsonl(path, skip_counter=None):
-    """讀一份 jsonl，只收字典。每一行各自 try：解析失敗的行跳過，解析
-    成功但不是 dict（例如整份紀錄檔被截斷成一行裸字串、一個數字、一個
-    list，甚至合法的 JSON null）的行也跳過——rollup() 假設收到的都是
-    dict，形狀檢查放在讀檔這一層做一次，呼叫端不用每個欄位存取都重新
-    驗證『這筆紀錄本身是不是字典』。
-
-    skip_counter 沒帶的話行為完全不變（沿用既有呼叫端／測試）；帶了的話
-    是一個單一元素的 list（`[0]` 這種），每跳過一行（解析失敗、或解析
-    成功但不是 dict）就 +1——呼叫端（main()）用它累計「讀檔這一關」的
-    略過筆數，跟 rollup() 自己那關（收到已經是 dict、但欄位形狀不對的
-    紀錄）的略過筆數合併成一個總數，見 task-8 fix-round 2：
-    store._append 是盡力而為、半寫壞的紀錄檔是常態而非例外，這個計數要
-    讓使用者看得到，不是悄悄吞掉。"""
-    if not os.path.exists(path):
-        return []
-    out = []
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            try:
-                rec = json.loads(line)
-            except Exception:
-                if skip_counter is not None:
-                    skip_counter[0] += 1
-                continue
-            if isinstance(rec, dict):
-                out.append(rec)
-            elif skip_counter is not None:
-                skip_counter[0] += 1
-    return out
+# read_jsonl 搬進 jsonl_io.py 了（task-9）：tr-eval 讀的是同一批可能半寫壞
+# 的封存檔案，容錯規則跟「skip_counter 累計略過筆數」的契約要保證只有一份
+# 實作，不是兩支各養各的、容易漂移。這裡保留頂層名稱 read_jsonl，模組內其他
+# 地方（含既有測試 stats.read_jsonl(...)）不用改呼叫方式。
 
 
 def _num(x, default=0):
