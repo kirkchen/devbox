@@ -1692,5 +1692,201 @@ class TestTuneRefusesToTuneOnNoEvidence(unittest.TestCase):
         self.assertIn("不足以當作依據", r.stdout)
 
 
+
+
+# ---------------------------------------------------------------------------
+# final review I2 / I3
+# ---------------------------------------------------------------------------
+
+import descriptor  # noqa: E402  (loaded the same way as store, from TR)
+
+
+class TestTombstoneEchoIsNotEvidence(unittest.TestCase):
+    """I2：descriptor.make() 把被刪段落首行的前 ~200 字元放進墓碑標記，
+    而那個標記就在改寫後的輸出裡、由 harness 在 hook 跑完之後寫進
+    transcript —— 它無條件落在 transcript_after 的視窗裡。段落的獨有詞
+    按定義不出現在同一份 result 的其他段落，所以標記常常是這些詞唯一
+    出現的地方，而 MIN_HITS 只要 2 個。結果：一份除了 hook 自己寫的那行
+    墓碑以外什麼都沒有的 transcript，也會讓這個段落被判成 silent_miss。
+    agent 什麼都沒做。"""
+
+    TOKENS = ["module.uat_cluster.ns_alpha", "module.uat_cluster.ns_beta"]
+    CHUNK = ("refreshing {0} and {1} state\n"
+             "still refreshing, nothing changed\n").format(*TOKENS)
+    HANDLE = "abc123def0.4"
+
+    def _decision(self):
+        marker = descriptor.make(self.CHUNK, self.HANDLE)
+        # 前提：標記真的帶著這兩個獨有詞，湊滿 MIN_HITS=2。不成立的話
+        # 這個測試就測不到 I2 描述的失效模式，只是恰好通過。
+        for t in self.TOKENS:
+            self.assertIn(t, marker)
+        self.assertGreaterEqual(
+            sum(tr_eval._count_token_occurrences(t, marker) for t in self.TOKENS),
+            tr_eval.MIN_HITS)
+        return marker, [{
+            "decision_id": "abc123def0", "session_id": "s1", "tool": "Bash",
+            "chars_before": 4000, "ts_ms": 1,
+            "chunks": [
+                {"i": 0, "chars": 100, "dropped": False, "distinctive": []},
+                {"i": 4, "chars": 300, "dropped": True, "distinctive": self.TOKENS},
+                {"i": 5, "chars": 100, "dropped": False, "distinctive": []}]}]
+
+    def test_a_transcript_holding_only_the_marker_classifies_clean(self):
+        marker, decisions = self._decision()
+        rows = tr_eval.classify(decisions, [], {"abc123def0": marker})
+        self.assertEqual(rows[0]["state"], "clean")
+
+    def test_the_marker_is_stripped_even_json_escaped_as_the_transcript_stores_it(self):
+        """transcript_after 把每則訊息的 content 用 json.dumps 攤平再比對，
+        所以標記在比對視窗裡是 JSON 字串裡的樣子，不是原始的樣子。"""
+        marker, decisions = self._decision()
+        later = json.dumps([{"type": "text", "text": marker}], ensure_ascii=False)
+        rows = tr_eval.classify(decisions, [], {"abc123def0": later})
+        self.assertEqual(rows[0]["state"], "clean")
+
+    def test_a_real_mention_outside_the_marker_still_counts(self):
+        """濾掉回音不能變成濾掉訊號：agent 真的複述那個識別字時，
+        silent_miss 還是要成立。"""
+        marker, decisions = self._decision()
+        tok = self.TOKENS[0]
+        later = f"{marker}\nlet me check {tok} again, {tok} looks wrong"
+        rows = tr_eval.classify(decisions, [], {"abc123def0": later})
+        self.assertEqual(rows[0]["state"], "silent_miss")
+
+    def test_several_markers_on_one_line_are_each_stripped(self):
+        """非貪婪比對：同一行上有兩個標記時不能把中間的文字一起吃掉。"""
+        a = descriptor.make("alpha_token_one here\n", "aaa1111111.1")
+        b = descriptor.make("beta_token_two here\n", "aaa1111111.2")
+        stripped = tr_eval.strip_tombstones(a + " KEEP_THIS " + b)
+        self.assertIn("KEEP_THIS", stripped)
+        self.assertNotIn("alpha_token_one", stripped)
+        self.assertNotIn("beta_token_two", stripped)
+
+    def test_restored_still_wins_over_the_stripped_window(self):
+        marker, decisions = self._decision()
+        rows = tr_eval.classify(decisions, [{"handle": self.HANDLE}],
+                                {"abc123def0": marker})
+        self.assertEqual(rows[0]["state"], "restored")
+
+
+SHADOW_DECISION = {
+    "decision_id": "sh1", "session_id": "sess-sh", "tool": "Bash",
+    "mode": "shadow", "chars_before": 12000, "ts_ms": 1,
+    "chunks": [
+        {"i": 0, "chars": 1000, "dropped": False, "distinctive": [],
+         "scores": {"noise": 0.1, "uniq": 0.9}},
+        {"i": 1, "chars": 3402, "dropped": True, "distinctive": ["shadow_only_tok"],
+         "scores": {"noise": 0.9, "uniq": 0.05}},
+        {"i": 2, "chars": 3402, "dropped": True, "distinctive": ["shadow_only_tok2"],
+         "scores": {"noise": 0.9, "uniq": 0.05}},
+        {"i": 3, "chars": 1000, "dropped": False, "distinctive": [],
+         "scores": {"noise": 0.1, "uniq": 0.9}}]}
+SHADOW_TOMBSTONES = [
+    {"handle": "sh1.1", "decision_id": "sh1", "mode": "shadow", "chars": 3402,
+     "descriptor": "[省略 30 行 · refreshing state · tr-restore sh1.1]"},
+    {"handle": "sh1.2", "decision_id": "sh1", "mode": "shadow", "chars": 3402,
+     "descriptor": "[省略 30 行 · refreshing state · tr-restore sh1.2]"}]
+
+
+class TestShadowRecordsAreFilterable(unittest.TestCase):
+    """I3：shadow 模式下 hook 照樣寫決策與墓碑紀錄（那是它的用途），但
+    紀錄本身沒有任何欄位能分辨「真的刪了」跟「只是演練」。README 的上線
+    流程就是先 shadow 再 full，兩種紀錄會混進同一份 append-only 的
+    archive/，三支離線工具讀的都是它。重現過的數字：一筆 shadow 決策、
+    沒有任何輸出被改過，tr-stats 卻報出淨省 6,804 字元、佔改前 57.0%、
+    還原率 0.0%。"""
+
+    def test_is_full_mode_treats_missing_mode_as_full(self):
+        import jsonl_io
+        self.assertTrue(jsonl_io.is_full_mode({"decision_id": "d"}))
+        self.assertTrue(jsonl_io.is_full_mode({"mode": "full"}))
+        self.assertFalse(jsonl_io.is_full_mode({"mode": "shadow"}))
+        self.assertFalse(jsonl_io.is_full_mode("not a dict"))
+
+    def test_filter_counts_what_it_removed(self):
+        import jsonl_io
+        counter = [0]
+        out = jsonl_io.filter_full_mode(
+            [{"mode": "shadow"}, {"mode": "full"}, {}], counter)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(counter[0], 1)
+
+    def _archive(self):
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"), [SHADOW_DECISION])
+        _write_jsonl(os.path.join(archive, "tombstones.jsonl"), SHADOW_TOMBSTONES)
+        return home
+
+    def _env(self, home, **extra):
+        return dict(os.environ, TOOL_REDUCE_HOME=home,
+                    TOOL_REDUCE_TRANSCRIPT_DIR=tempfile.mkdtemp(), **extra)
+
+    def test_stats_reports_no_saving_from_a_shadow_only_archive(self):
+        home = self._archive()
+        r = subprocess.run([sys.executable, STATS_PATH, "--json"],
+                           capture_output=True, text=True, env=self._env(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["gross_saved"], 0)
+        self.assertEqual(out["net_saved"], 0)
+        self.assertEqual(out["tombstone_cost"], 0)
+        self.assertEqual(out["decisions"], 0)
+        self.assertEqual(out["tombstones"], 0)
+        self.assertEqual(out["shadow_records_excluded"], 3)
+
+    def test_stats_says_out_loud_that_it_dropped_them(self):
+        home = self._archive()
+        r = subprocess.run([sys.executable, STATS_PATH],
+                           capture_output=True, text=True, env=self._env(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("shadow", r.stdout)
+
+    def test_eval_does_not_classify_shadow_chunks(self):
+        home = self._archive()
+        r = subprocess.run([sys.executable, EVAL_PATH],
+                           capture_output=True, text=True, env=self._env(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("墓碑 0 個", r.stdout)
+        self.assertIn("shadow", r.stdout)
+
+    def test_tune_does_not_count_shadow_decisions_as_evidence(self):
+        """shadow 紀錄不能把 MIN_DECISIONS 那一關墊過去。"""
+        home = self._archive()
+        with open(os.path.join(home, "archive", "decisions.jsonl"), "a",
+                 encoding="utf-8") as fh:
+            for d in _filler_decisions(tr_tune.MIN_DECISIONS - 1, prefix="shfill"):
+                fh.write(json.dumps(dict(d, mode="shadow"), ensure_ascii=False) + "\n")
+        with open(os.path.join(home, "archive", "human_baseline.json"), "w",
+                 encoding="utf-8") as fh:
+            json.dump({"labelled": 50, "agreement": 0.9, "new_since": 10}, fh)
+        thresholds = os.path.join(tempfile.mkdtemp(), "thresholds.json")
+        r = subprocess.run([sys.executable, TUNE_PATH, "--apply"], capture_output=True,
+                           text=True, env=self._env(home, TOOL_REDUCE_THRESHOLDS=thresholds))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("拒絕套用", r.stdout)
+        self.assertIn("shadow", r.stdout)
+        self.assertFalse(os.path.exists(thresholds))
+
+    def test_full_records_are_still_counted(self):
+        """濾掉 shadow 不能變成濾掉全部：沒有 mode 欄位的舊紀錄、跟明講
+        mode=full 的新紀錄都要照算。"""
+        home = tempfile.mkdtemp()
+        archive = os.path.join(home, "archive")
+        os.makedirs(archive, exist_ok=True)
+        _write_jsonl(os.path.join(archive, "decisions.jsonl"),
+                     [dict(SHADOW_DECISION, decision_id="f1", mode="full"),
+                      {k: v for k, v in SHADOW_DECISION.items()
+                       if k != "mode"} | {"decision_id": "f2"}])
+        r = subprocess.run([sys.executable, STATS_PATH, "--json"],
+                           capture_output=True, text=True, env=self._env(home))
+        out = json.loads(r.stdout)
+        self.assertEqual(out["decisions"], 2)
+        self.assertEqual(out["gross_saved"], 3402 * 2 * 2)
+        self.assertEqual(out["shadow_records_excluded"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

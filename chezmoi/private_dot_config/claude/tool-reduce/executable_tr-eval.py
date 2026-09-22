@@ -36,7 +36,7 @@ from datetime import datetime
 
 import descriptor
 import store
-from jsonl_io import read_jsonl
+from jsonl_io import filter_full_mode, read_jsonl
 
 MIN_HITS = 2               # 獨有詞至少命中幾個才算「後來被用到」——別調，見上面的說明
 CONTROL_RATE = 0.10        # 隨機對照組：抽多少比例「沒被刪」的段落一起判
@@ -46,6 +46,33 @@ CONTROL_RATE = 0.10        # 隨機對照組：抽多少比例「沒被刪」的
 # 必須是同一份——直接組 descriptor.TOKEN_CHARS，不是在這裡另外寫一份
 # 一樣的字元集合，兩邊才不會走鐘（task-9 fix-round 2）。
 _TOKEN_CHAR_RE = re.compile("[" + descriptor.TOKEN_CHARS + "]")
+
+# 墓碑標記本身的形狀（descriptor.make）：
+#   `[省略 N 行 · <該段首行的前 ~200 字 · tr-restore <handle>]`
+# 非貪婪 + 長度上限：標記封頂 250 字元，JSON 跳脫最多再膨脹一些，400 綽綽
+# 有餘；上限的作用是不讓一個落單的 `[省略` 把後面整段文字都吃掉。
+_TOMBSTONE_RE = re.compile(r"\[省略.{0,400}?tr-restore\s+[A-Za-z0-9]+\.\d+\s*\]", re.S)
+
+
+def strip_tombstones(text):
+    """把 hook 自己寫的墓碑標記從比對視窗裡拿掉。
+
+    descriptor.make() 會把被刪段落首行的前 ~200 字元放進標記，而那個標記
+    就在改寫後的輸出裡、由 harness 在 hook 跑完之後寫進 transcript ——
+    也就是說它「無條件」落在 transcript_after 的視窗裡。段落的獨有詞按
+    定義不出現在同一份 result 的其他段落，所以標記常常是這些詞唯一出現
+    的地方，而 MIN_HITS 只要 2 個。結果：一份除了 hook 自己寫的那行墓碑
+    以外什麼都沒有的 transcript，也會讓這個段落被判成 silent_miss。
+    agent 什麼都沒做。
+
+    連帶影響 tr-tune：main() 拿 current["silent_miss_rate"] 當每個候選
+    必須打敗的上限。現行紀錄有墓碑、被回音灌水；候選是重新標註出來的，
+    它們刪的段落在 transcript 裡沒有對應的標記，所以量到的是沒有回音的
+    版本。上限系統性偏鬆，候選系統性看起來比現行安全。
+
+    真的被還原的段落不受影響：那走 restores.jsonl 的精確比對，而且
+    restored 判定永遠贏過詞比對。"""
+    return _TOMBSTONE_RE.sub(" ", text)
 
 
 def _mark_skip(skip_counter):
@@ -155,7 +182,12 @@ def classify(decisions, restores, later_text_by_decision, skip_counter=None):
         decision_id = d["decision_id"]
         tool = d.get("tool")
         tool = tool if isinstance(tool, str) and tool else "unknown"
-        later = later_text_by_decision.get(decision_id) or ""
+        # 先把 hook 自己寫的墓碑標記從比對視窗裡拿掉（見 strip_tombstones）
+        # ——標記裡就帶著被刪段落的首行，不濾掉的話等於拿自己的輸出當作
+        # 「agent 需要這段」的證據。在這裡濾而不是在 transcript_after 裡
+        # 濾：所有呼叫端（含 tr-tune 的 _relabel，它直接餵 later_text）
+        # 都會經過這一行。
+        later = strip_tombstones(later_text_by_decision.get(decision_id) or "")
         for c in chunks:
             if not c.get("dropped"):
                 continue
@@ -321,7 +353,12 @@ def main():
     base = os.path.join(home, "archive")
 
     read_skip = [0]
-    decisions = read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip)
+    shadow_skip = [0]
+    # shadow 模式的紀錄在這一層就濾掉（見 jsonl_io.is_full_mode）。這支
+    # 受 shadow 汙染最重：shadow 模式下 agent 看得到全文，獨有詞自然會
+    # 再出現，每一段都會被算成沉默誤刪。
+    decisions = filter_full_mode(
+        read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip), shadow_skip)
     restores = read_jsonl(os.path.join(base, "restores.jsonl"), read_skip)
     by_id = {d["decision_id"]: d for d in decisions
              if isinstance(d, dict) and isinstance(d.get("decision_id"), str)}
@@ -336,6 +373,9 @@ def main():
     if total_skipped:
         print(f"  注意：{total_skipped} 筆紀錄格式不對，已略過、"
              f"未列入以下統計（可能是半寫壞的紀錄檔）\n")
+    if shadow_skip[0]:
+        print(f"  注意：{shadow_skip[0]} 筆 shadow 模式的決策未列入以下分類"
+             f"（那些段落沒有真的從 tool output 消失）\n")
     print(f"  還原       {s['restored']:>6}  ({s['restored_rate']:.1%})  確定誤刪，已救回")
     print(f"  沉默誤刪   {s['silent_miss']:>6}  ({s['silent_miss_rate']:.1%})  "
          f"需要卻沒去拿——近似指標，不是精確量測")

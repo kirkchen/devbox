@@ -23,6 +23,39 @@ import json
 import os
 
 
+def is_full_mode(rec):
+    """這筆紀錄是不是 `full` 模式寫的 —— 也就是「這次真的從 tool output
+    刪了東西」，不是 shadow 模式的演練。
+
+    PostToolUse hook 在 shadow 模式下一樣會寫決策與墓碑紀錄（那正是它的
+    用途：累積資料但不動 agent 看到的東西），而兩種紀錄會混進同一份
+    append-only 的 archive/，三支離線工具讀的都是它。README 的上線流程
+    就是先 shadow 再 full，所以混在一起是預期會發生的事，不是意外。
+
+    沒有 `mode` 欄位的紀錄當成 full：那是這個欄位加上去以前寫的紀錄，
+    而那個時候 shadow 跟 full 本來就分不出來，假裝分得出來只會把猜測
+    當成事實。
+
+    shadow 的紀錄對每支工具的傷害不同：tr-stats 會報出根本沒發生的節省
+    （「省了 6,804 字元、還原率 0.0%」，而實際上沒有任何一份輸出被改過）；
+    tr-eval 受傷最重，shadow 模式下 agent 看得到全文，獨有詞自然會再出現，
+    每一段都會被算成沉默誤刪。"""
+    if not isinstance(rec, dict):
+        return False
+    mode = rec.get("mode")
+    return mode is None or mode == "full"
+
+
+def filter_full_mode(records, counter=None):
+    """濾掉非 full 模式的紀錄。counter 是選擇性的單一元素 list，濾掉幾筆
+    就 +=，讓呼叫端可以印出來 —— 跟 skip_counter 一樣的契約，安靜吞掉
+    才是這個專案一直在避免的事。"""
+    out = [r for r in records if is_full_mode(r)]
+    if counter is not None:
+        counter[0] += len(records) - len(out)
+    return out
+
+
 def read_jsonl(path, skip_counter=None):
     if not os.path.exists(path):
         return []

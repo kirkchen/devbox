@@ -28,7 +28,7 @@ import re
 import sys
 
 import store
-from jsonl_io import read_jsonl
+from jsonl_io import filter_full_mode, read_jsonl
 
 # session id 的字元集合刻意收緊：只認字母、數字、下底線、連字號，不含
 # `.` 或 `/`——擋掉 `--session ../../../../etc` 這種路徑穿越寫法，不需要
@@ -241,10 +241,20 @@ def main():
     # rollup() 的那些行」，rollup() 只數「進去了、但形狀不合格被退回」
     # 的那些紀錄。
     read_skip = [0]
-    r = rollup(read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip),
-               read_jsonl(os.path.join(base, "tombstones.jsonl"), read_skip),
+    # shadow 模式的紀錄在這一層就濾掉（見 jsonl_io.is_full_mode）。決策跟
+    # 墓碑兩份都要濾：墓碑成本是獨立加總的，只濾決策的話 shadow 的墓碑
+    # 成本還是會被算在 full 的節省上。restores.jsonl 沒有 mode 欄位，
+    # 一次還原就是一次還原，不分模式。
+    shadow_skip = [0]
+    r = rollup(filter_full_mode(
+                   read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip),
+                   shadow_skip),
+               filter_full_mode(
+                   read_jsonl(os.path.join(base, "tombstones.jsonl"), read_skip),
+                   shadow_skip),
                read_jsonl(os.path.join(base, "restores.jsonl"), read_skip))
     r["records_skipped"] += read_skip[0]
+    r["shadow_records_excluded"] = shadow_skip[0]
     if a.json:
         print(json.dumps(r, ensure_ascii=False, indent=2))
         return 0
@@ -253,6 +263,9 @@ def main():
     if r["records_skipped"]:
         print(f"  注意：{r['records_skipped']} 筆紀錄格式不對，已略過、"
              f"未列入以下統計（可能是半寫壞的紀錄檔）\n")
+    if r["shadow_records_excluded"]:
+        print(f"  注意：{r['shadow_records_excluded']} 筆 shadow 模式的紀錄"
+             f"未列入以下統計（那些判斷沒有真的改動任何輸出）\n")
     print(f"  毛省      {r['gross_saved']:>12,} 字元")
     print(f"  墓碑成本  {r['tombstone_cost']:>12,}")
     print(f"  還原拉回  {r['restored_chars']:>12,}")

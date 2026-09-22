@@ -253,7 +253,13 @@ def main():
     base = os.path.join(home, "archive")
 
     read_skip = [0]
-    decisions = tr_eval.read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip)
+    shadow_skip = [0]
+    # shadow 模式的紀錄在這一層就濾掉（見 jsonl_io.is_full_mode）。門檻
+    # 是從這批紀錄推導出來的，混進「沒有真的刪過東西」的判斷會讓上限
+    # 跟排名都失真。
+    decisions = tr_eval.filter_full_mode(
+        tr_eval.read_jsonl(os.path.join(base, "decisions.jsonl"), read_skip),
+        shadow_skip)
     restores = tr_eval.read_jsonl(os.path.join(base, "restores.jsonl"), read_skip)
     by_id = {d["decision_id"]: d for d in decisions
              if isinstance(d, dict) and isinstance(d.get("decision_id"), str)}
@@ -267,6 +273,9 @@ def main():
     if total_skipped:
         print(f"注意：{total_skipped} 筆紀錄格式不對，已略過、未列入以下重算"
               "（可能是半寫壞的紀錄檔）\n")
+    if shadow_skip[0]:
+        print(f"注意：{shadow_skip[0]} 筆 shadow 模式的決策未列入以下重算"
+              "（那些段落沒有真的從 tool output 消失）\n")
 
     if a.allow_worse:
         ceiling = 1.0
